@@ -4,7 +4,7 @@ install.packages("magrittr")
 library(tidyverse)
 
 setwd("C:/Users/danie/Documents/2. semester/oznal/R files/zadanie/")
-df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260422.csv")
+df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260423.csv")
 View(df)
 
 # What size, columns, ...

@@ -50,11 +50,18 @@ df %>%
 
 # Summary statistics - min, max, mean, median
 
+get_mode <- function(x) {
+  ux <- unique(na.omit(x))
+  if(length(ux) == 0) return(NA)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
 final_summary <- df %>%
   summarise(across(where(is.numeric), list(
     Min    = ~ min(.x, na.rm = TRUE),
     Mean   = ~ mean(.x, na.rm = TRUE),
     Median = ~ median(.x, na.rm = TRUE),
+    Mode   = ~ get_mode(.x),
     Max    = ~ max(.x, na.rm = TRUE)
   ))) %>%
   pivot_longer(everything(), names_to = "temp_name", values_to = "value") %>%

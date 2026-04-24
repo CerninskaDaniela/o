@@ -1,7 +1,12 @@
 install.packages("tidyverse")
 install.packages("magrittr")
+install.packages("tidymodels")
 
 library(tidyverse)
+library(dplyr)
+library(tibble)
+library(tidymodels)
+library(randomForest)
 
 setwd("C:/Users/danie/Documents/2. semester/oznal/R files/zadanie/")
 df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260423.csv")
@@ -43,20 +48,13 @@ df %>%
 # Convenient value formats, column names
 
 
-# Summary statistics - min, max, mean, median, mode
-
-get_mode <- function(x) {
-  ux <- unique(na.omit(x))
-  if(length(ux) == 0) return(NA)
-  ux[which.max(tabulate(match(x, ux)))]
-}
+# Summary statistics - min, max, mean, median
 
 final_summary <- df %>%
   summarise(across(where(is.numeric), list(
     Min    = ~ min(.x, na.rm = TRUE),
     Mean   = ~ mean(.x, na.rm = TRUE),
     Median = ~ median(.x, na.rm = TRUE),
-    Mode   = ~ get_mode(.x),
     Max    = ~ max(.x, na.rm = TRUE)
   ))) %>%
   pivot_longer(everything(), names_to = "temp_name", values_to = "value") %>%
@@ -99,13 +97,13 @@ df %>%
 
 # examples to tasks
 # 1 
-# Logistic Regression (Statistical Family / Linear Partitioning)
-# Decision Tree (Machine Learning Family / Recursive Partitioning)
-# Random Forest (Machine Learning Family / Recursive Partitioning)
+# Linear Regression
+# Decision Tree
+# Random Forest
 
 # 2
-# Parametric: Logistic Regression, Linear Discriminant Analysis (LDA), Probit Regression
-# Nonparametric: k-Nearest Neighbors (k-NN), Decision Tree (CART), Support Vector Machine (SVM) with RBF Kernel
+# Parametric: Linear Regression, Linear Discriminant Analysis (LDA), Probit Regression
+# Nonparametric: k-Nearest Neighbors (k-NN), Decision Tree, Support Vector Machine (SVM)
 
 # 3
 # one algorithmic: stepwise selection
@@ -183,3 +181,40 @@ selected_cols <- c(
 df_model <- df %>%
   select(all_of(selected_cols)) %>%
   na.omit()
+
+
+
+df_clean <- df %>%
+  select(ends_with("_CrudePrev"), TotalPop18plus, TotalPopulation) %>%
+  drop_na()
+
+data_split <- initial_split(df, prop = 0.8)
+
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+
+df <- df %>%
+  mutate(STROKE_CrudePrev = as.numeric(STROKE_CrudePrev)) %>%
+  filter(!is.na(STROKE_CrudePrev))
+
+# Random forest
+rand_forest <- randomForest(formula = VISION_CrudePrev ~ SLEEP_CrudePrev+STROKE_CrudePrev,
+                            data=df_clean, 
+                            ntree=500, 
+                            mtry=5, 
+                            nodesize=5, 
+                            maxnodes=30, 
+                            replace=TRUE, 
+                            importance=TRUE)
+print(rand_forest)
+importance(rand_forest)
+View(rand_forest)
+
+# Linear regression
+lm.simple <- df_clean  %>% 
+  lm(GHLTH_CrudePrev ~ CSMOKING_CrudePrev + BINGE_CrudePrev + OBESITY_CrudePrev + SLEEP_CrudePrev, .) 
+
+lm.simple
+summary(lm.simple)
+tidy(lm.simple)
+View(lm.simple)

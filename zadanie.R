@@ -7,6 +7,10 @@ setwd("C:/Users/danie/Documents/2. semester/oznal/R files/zadanie/")
 df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260423.csv")
 View(df)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# EDA
+# ══════════════════════════════════════════════════════════════════════════════
+
 # What size, columns, ...
 dim(df)
 
@@ -62,7 +66,7 @@ final_summary <- df %>%
 print(final_summary, n = Inf)
 
 # Value distribution
-
+summary(df)
 
 # Vizualizations
 
@@ -106,3 +110,76 @@ df %>%
 # 3
 # one algorithmic: stepwise selection
 # two embedded: LASSO, ridge regression
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HYPOTHESIS & PROJECT SETUP
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Target variable: GHLTH_CrudePrev
+# (Crude prevalence of fair or poor self-rated general health, %)
+#
+# Features (behavioral & socioeconomic determinants):
+#   - CSMOKING_CrudePrev   : Current smoking
+#   - BINGE_CrudePrev      : Binge drinking
+#   - LPA_CrudePrev        : Physical inactivity
+#   - SLEEP_CrudePrev      : Sleep deprivation
+#   - OBESITY_CrudePrev    : Obesity
+#   - ACCESS2_CrudePrev    : Lack of health insurance / access to care
+#   - FOODINSECU_CrudePrev : Food insecurity
+#   - HOUSINSECU_CrudePrev : Housing insecurity
+#   - SHUTUTILITY_CrudePrev: Utility shutoff risk
+#   - TotalPop18plus       : Population size (control variable)
+#
+# Main hypothesis:
+#   General health outcomes at the ZCTA level are significantly predicted
+#   by behavioral and socioeconomic factors. We expect that smoking,
+#   physical inactivity, and food/housing insecurity will be the strongest
+#   predictors of poor self-rated health.
+#
+# Scenario 1 hypothesis:
+#   Tree-based methods (recursive partitioning) will outperform linear
+#   partitioning in predictive accuracy, as relationships between
+#   health determinants and GHLTH are likely nonlinear.
+#   We expect key features (smoking, obesity, inactivity) to remain
+#   informative across both partitioning families.
+#
+# Scenario 2 hypothesis:
+#   Nonparametric models will achieve higher accuracy than parametric
+#   models due to the nonlinear nature of health outcome data.
+#   However, parametric models will offer stronger explainability
+#   and reproducibility.
+#
+# Scenario 1 — 3 methods, 2 feature-space partitioning approaches:
+#   Linear Partitioning:    Linear Regression
+#   Recursive Partitioning: Decision Tree (CART), Random Forest
+#
+# Scenario 2 — Parametric vs Nonparametric (3 + 3 methods):
+#   Parametric:    Linear Regression, Ridge Regression, Lasso Regression
+#   Nonparametric: Decision Tree (CART), Random Forest, k-NN Regression
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PREPROCESSING
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Fix TotalPop18Plus - stored as string with comma formatting (e.g. "14,019")
+df <- df %>%
+  mutate(TotalPop18plus = as.numeric(gsub(",", "", TotalPop18plus)))
+
+# Select relevant columns
+selected_cols <- c(
+  "GHLTH_CrudePrev",
+  "TotalPop18plus",
+  "ACCESS2_CrudePrev",
+  "BINGE_CrudePrev",
+  "CSMOKING_CrudePrev",
+  "LPA_CrudePrev",
+  "SLEEP_CrudePrev",
+  "OBESITY_CrudePrev",
+  "FOODINSECU_CrudePrev",
+  "HOUSINSECU_CrudePrev",
+  "SHUTUTILITY_CrudePrev"
+)
+
+df_model <- df %>%
+  select(all_of(selected_cols)) %>%
+  na.omit()

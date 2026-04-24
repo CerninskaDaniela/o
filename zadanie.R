@@ -7,6 +7,8 @@ library(dplyr)
 library(tibble)
 library(tidymodels)
 library(randomForest)
+library(conflicted)
+conflicts_prefer(tidyr::extract)
 
 setwd("C:/Users/danie/Documents/2. semester/oznal/R files/zadanie/")
 df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260423.csv")
@@ -18,6 +20,7 @@ View(df)
 
 # What size, columns, ...
 dim(df)
+colnames(df)
 
 # Check duplicates
 duplicates <- df %>% 
@@ -46,7 +49,8 @@ df %>%
 
 
 # Convenient value formats, column names
-
+df <- df %>%
+  rename_with(~ str_replace_all(., "_CrudePrev", ""))
 
 # Summary statistics - min, max, mean, median
 

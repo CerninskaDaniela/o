@@ -1,0 +1,243 @@
+---
+title: "oznal"
+output: html_document
+date: "2026-04-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r import_libs, echo=FALSE}
+library(dplyr)
+library(tibble)
+library(randomForest)
+library(tidyverse)
+library(magrittr)
+library(patchwork)
+library(conflicted)
+conflicts_prefer(dplyr::filter) 
+conflicts_prefer(tidyr::extract) 
+
+df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260423.csv")
+```
+
+fff
+
+## Hypotheses
+
+Preventive practices have influence on health outcomes.
+Health risk behavior has bad influence on health outcomes.
+Health related-social needs have influence on health outcomes.
+The highest risk factor for stroke is high-blood pressure and taking medicine for it and obesity, cholesteral screening, coronary heart disease.
+Smoking is highest risk factor for asthma and cancer.
+Highest influence on all-teeth lost is by smoking, diagnosed diabetes, visited dentist.
+Obesity is most influenced by smoking, binge drinking, lack of leisure-time physical activity.
+Disability is influenced by health-risk behavior and social-related social needs.
+Health outcomes have the highest influence on self-reported health status from all other categories.
+Health-related social needs and health outcomes have high influence on depression.
+Is it important to solve loneliness?
+Which is the most cost effective improvement - which has highest risk and could be solved most cheaply?
+...
+
+### Scenarios
+
+## Exploratory data analysis
+
+### Size
+
+We need to find out the size of the dataset and the names of columns:
+
+```{r size, include=TRUE}
+dim(df)
+colnames(df)
+```
+
+We can see that there are columns ZCTA5 - this is unique id value for a row, which identifies area from which values of parameters are measured. There are columns for population and population over 18, and also geolocation. Other columns which have the main values are paired up, the one ending with \_crudePrev show average of that value in an area, and the ones ending with \_CI show two values, which mean that there is 95% confidence that value is somewhere in this interval.
+
+### Data formats
+
+```{r structure, include=TRUE}
+str(df)
+```
+
+We need to change population values to integers instead of strings. We can also see that some columns have char format instead of number. We need to find them and change appropriately.
+
+```{r population_format, include=TRUE}
+df <- df %>%
+  mutate(across(c(TotalPopulation, TotalPop18plus), ~ {
+    clean_val <- gsub("[^0-9]", "", .x)
+    as.numeric(clean_val)
+  }))
+```
+
+We also need to solve the problem with CI columns.
+
+```{r ci_columns, include=TRUE}
+ci_cols <- names(df)[grep("_Crude95CI", names(df))]
+
+for (col in ci_cols) {
+  width_name <- paste0(col, "_width")
+  
+  clean_vec <- str_remove_all(df[[col]], "[()\\s]")
+  split_matrix <- str_split_fixed(clean_vec, ",", 2)
+  df[[width_name]] <- as.numeric(as.numeric(split_matrix[, 2]) - as.numeric(split_matrix[, 1]))
+  
+  df <- df %>%
+    relocate(all_of(width_name), .after = !!sym(col)) %>%
+    select(-!!sym(col))
+}
+```
+
+We calculate the range of values for 95 CI percentage. To keep min and max value would not be very useful, as that infomation would highly correlate with crudePrev average values, but as range, it could give us information about certainty if the range is small enough and would increase the strength of the predictions.
+
+
+```{r fix_col_char, include=TRUE}
+cols_crude_char <- df %>%
+  select(ends_with("CrudePrev") & where(is.character)) %>%
+  colnames()
+
+print(cols_crude_char)
+```
+
+```{r fix_char}
+df <- df %>%
+  mutate(across(all_of(cols_crude_char), ~ {
+    as.numeric(gsub(",", ".", .x))
+  }))
+
+str(df %>% select(all_of(cols_crude_char)))
+```
+
+We can also see that columns which were not included in the previous part, that they lost commas.
+
+```{r fix_col_num, include=TRUE}
+cols_crude_num <- df %>%
+  select(ends_with("CrudePrev") & where(is.numeric)) %>%
+  colnames()
+
+print(cols_crude_num)
+```
+
+```{r fix_num, include=TRUE}
+walk(cols_crude_num, function(col_name) {
+  high_name <- paste0(str_remove(col_name, "CrudePrev"), "Crude95CI_High")
+  
+  
+  if (high_name %in% colnames(df)) {
+    df <<- df %>%
+      mutate(!!sym(col_name) := if_else(
+        !is.na(!!sym(col_name)) & !is.na(!!sym(high_name)) & !!sym(col_name) > !!sym(high_name),
+        !!sym(col_name) / 10,
+        !!sym(col_name)
+      ))
+  }
+})
+
+```
+
+```{r geolocation_col, include=TRUE}
+
+df <- df %>%
+  separate_wider_regex(
+    cols = Geolocation,
+    patterns = c(
+      ".*\\(",                 
+      Longitude = "-?\\d+\\.\\d+", 
+      " ",                     
+      Latitude = "-?\\d+\\.\\d+",
+      "\\)"                   
+    ),
+    too_few = "align_start"
+  ) %>%
+  mutate(
+    Longitude = as.numeric(Longitude),
+    Latitude = as.numeric(Latitude)
+  )
+```
+
+```{r str_repeat, include=TRUE}
+str(df)
+```
+
+### Duplicates
+
+Because we know that ZCTA5 acts as id, it is necessary to check only this column for duplicates.
+
+```{r duplicates, include=TRUE}
+duplicates <- df %>% 
+  filter(duplicated(ZCTA5))
+duplicates
+```
+
+We can see that in this dataset there are no duplicates.
+
+### Missing values
+
+We need to check how many missing values is in the dataset
+
+```{r missing, include=TRUE}
+
+df %>%
+  summarise(across(everything(), ~ sum(is.na(.x)))) %>%
+  pivot_longer(everything(), names_to = "column_name", values_to = "na_count") %>%
+  mutate(
+    percentage = (na_count / nrow(df)) * 100
+  ) %>%
+  print(n = Inf)
+
+df %>%
+  mutate(na_per_row = rowSums(is.na(.))) %>%
+  count(na_per_row) %>%
+  mutate(percentage = (n / sum(n)) * 100)
+
+
+```
+```{r complete_cases}
+df %>%
+  filter(complete.cases(.)) %>%
+  nrow()
+```
+
+We can see that majority of columns have 7.8% values missing and there are 7 pairs of columns which have 25.5% of missing values, and also that there are almost 75% of rows which have no missing values.
+
+```{r missing_visualization}
+df_viz <-df %>%
+  mutate(
+    na_count = rowSums(is.na(.)),
+    na_percent = rowMeans(is.na(.)) * 100
+  )
+ggplot(df_viz, aes(x = Longitude, y = Latitude, color = na_percent)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_viridis_c(option = "plasma") + # High contrast color scale
+  theme_minimal() +
+  labs(
+    title = "Spatial Distribution of Missing Values",
+    subtitle = "Points colored by number of missing values percentage per row",
+    x = "Longitude",
+    y = "Latitude",
+    color = "NA percent"
+  )
+```
+We can see that the missing values are influenced by states from which they are collected. For this reason, we will not remove all the missing rows, because for many of states we would completely lose all the information. If later there are features we need missing, we will deal with it.
+
+```{r g}
+df <- df %>%
+  mutate(TotalPop18plus = as.numeric(gsub(",", "", TotalPop18plus)))
+
+# Select relevant columns
+selected_cols <- c(
+  "GHLTH_CrudePrev",
+  "TotalPop18plus",
+  "ACCESS2_CrudePrev",
+  "BINGE_CrudePrev",
+  "CSMOKING_CrudePrev",
+  "LPA_CrudePrev",
+  "SLEEP_CrudePrev",
+  "OBESITY_CrudePrev",
+  "FOODINSECU_CrudePrev",
+  "HOUSINSECU_CrudePrev",
+  "SHUTUTILITY_CrudePrev"
+)
+```

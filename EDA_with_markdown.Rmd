@@ -9,17 +9,41 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
+```{r tidymodel_install}
+install.packages("rlang")
+install.packages("recipes")
+install.packages("parsnip")
+install.packages("kknn")
+library(rlang)
+library(recipes)
+library(parsnip)
+library(workflows)
+library(tune)
+library(dials)
+library(kknn)
+```
+
 ```{r import_libs, echo=FALSE}
 library(dplyr)
 library(tibble)
+library(corrplot)
 library(randomForest)
 library(tidyverse)
 library(magrittr)
 library(patchwork)
+library(ggplot2)
+library(e1071)
+library(caret)
 library(conflicted)
+library(rsample)
 conflicts_prefer(dplyr::filter) 
 conflicts_prefer(tidyr::extract) 
 
+set.seed(42)
+
+```
+
+```{r load_data}
 df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260423.csv")
 ```
 
@@ -27,19 +51,7 @@ fff
 
 ## Hypotheses
 
-Preventive practices have influence on health outcomes.
-Health risk behavior has bad influence on health outcomes.
-Health related-social needs have influence on health outcomes.
-The highest risk factor for stroke is high-blood pressure and taking medicine for it and obesity, cholesteral screening, coronary heart disease.
-Smoking is highest risk factor for asthma and cancer.
-Highest influence on all-teeth lost is by smoking, diagnosed diabetes, visited dentist.
-Obesity is most influenced by smoking, binge drinking, lack of leisure-time physical activity.
-Disability is influenced by health-risk behavior and social-related social needs.
-Health outcomes have the highest influence on self-reported health status from all other categories.
-Health-related social needs and health outcomes have high influence on depression.
-Is it important to solve loneliness?
-Which is the most cost effective improvement - which has highest risk and could be solved most cheaply?
-...
+Preventive practices have influence on health outcomes. Health risk behavior has bad influence on health outcomes. Health related-social needs have influence on health outcomes. The highest risk factor for stroke is high-blood pressure and taking medicine for it and obesity, cholesterol screening, coronary heart disease. Smoking is highest risk factor for asthma and cancer. Highest influence on all-teeth lost is by smoking, diagnosed diabetes, visited dentist. Obesity is most influenced by smoking, binge drinking, lack of leisure-time physical activity. Disability is influenced by health-risk behavior and social-related social needs. Health outcomes have the highest influence on self-reported health status from all other categories. Health-related social needs and health outcomes have high influence on depression. Is it important to solve loneliness? Which is the most cost effective improvement - which has highest risk and could be solved most cheaply? ...
 
 ### Scenarios
 
@@ -79,10 +91,12 @@ ci_cols <- names(df)[grep("_Crude95CI", names(df))]
 
 for (col in ci_cols) {
   width_name <- paste0(col, "_width")
+  high_name <- paste0(col, "_high")
   
   clean_vec <- str_remove_all(df[[col]], "[()\\s]")
   split_matrix <- str_split_fixed(clean_vec, ",", 2)
   df[[width_name]] <- as.numeric(as.numeric(split_matrix[, 2]) - as.numeric(split_matrix[, 1]))
+  df[[high_name]] <- as.numeric(split_matrix[, 2])
   
   df <- df %>%
     relocate(all_of(width_name), .after = !!sym(col)) %>%
@@ -91,7 +105,6 @@ for (col in ci_cols) {
 ```
 
 We calculate the range of values for 95 CI percentage. To keep min and max value would not be very useful, as that infomation would highly correlate with crudePrev average values, but as range, it could give us information about certainty if the range is small enough and would increase the strength of the predictions.
-
 
 ```{r fix_col_char, include=TRUE}
 cols_crude_char <- df %>%
@@ -122,7 +135,7 @@ print(cols_crude_num)
 
 ```{r fix_num, include=TRUE}
 walk(cols_crude_num, function(col_name) {
-  high_name <- paste0(str_remove(col_name, "CrudePrev"), "Crude95CI_High")
+  high_name <- paste0(str_remove(col_name, "CrudePrev"), "Crude95CI_high")
   
   
   if (high_name %in% colnames(df)) {
@@ -134,8 +147,12 @@ walk(cols_crude_num, function(col_name) {
       ))
   }
 })
+df <- df %>%
+  select(-ends_with("high"))
 
 ```
+
+
 
 ```{r geolocation_col, include=TRUE}
 
@@ -171,7 +188,7 @@ duplicates <- df %>%
 duplicates
 ```
 
-We can see that in this dataset there are no duplicates.
+We can see that in this dataset there are no duplicate rows.
 
 ### Missing values
 
@@ -194,6 +211,7 @@ df %>%
 
 
 ```
+
 ```{r complete_cases}
 df %>%
   filter(complete.cases(.)) %>%
@@ -209,8 +227,8 @@ df_viz <-df %>%
     na_percent = rowMeans(is.na(.)) * 100
   )
 ggplot(df_viz, aes(x = Longitude, y = Latitude, color = na_percent)) +
-  geom_point(alpha = 0.6, size = 1.5) +
-  scale_color_viridis_c(option = "plasma") + # High contrast color scale
+  geom_point(alpha = 0.6, size = 1) +
+  scale_color_viridis_c(option = "plasma") + 
   theme_minimal() +
   labs(
     title = "Spatial Distribution of Missing Values",
@@ -220,24 +238,465 @@ ggplot(df_viz, aes(x = Longitude, y = Latitude, color = na_percent)) +
     color = "NA percent"
   )
 ```
+
 We can see that the missing values are influenced by states from which they are collected. For this reason, we will not remove all the missing rows, because for many of states we would completely lose all the information. If later there are features we need missing, we will deal with it.
 
-```{r g}
-df <- df %>%
-  mutate(TotalPop18plus = as.numeric(gsub(",", "", TotalPop18plus)))
+###Column names
 
-# Select relevant columns
-selected_cols <- c(
-  "GHLTH_CrudePrev",
-  "TotalPop18plus",
-  "ACCESS2_CrudePrev",
-  "BINGE_CrudePrev",
-  "CSMOKING_CrudePrev",
-  "LPA_CrudePrev",
-  "SLEEP_CrudePrev",
-  "OBESITY_CrudePrev",
-  "FOODINSECU_CrudePrev",
-  "HOUSINSECU_CrudePrev",
-  "SHUTUTILITY_CrudePrev"
+We need to rename columns as some names are not informative enough.
+
+```{r column_names}
+colnames(df)
+```
+
+```{r rename_columns}
+df <- df %>%
+  rename(
+    Insurance_lack_m = ACCESS2_CrudePrev,
+    Insurance_lack_w = ACCESS2_Crude95CI_width,
+    Arthritis_m = ARTHRITIS_CrudePrev,
+    Arthritis_w = ARTHRITIS_Crude95CI_width,
+    Drinking_m = BINGE_CrudePrev,
+    Drinking_w = BINGE_Crude95CI_width,
+    HBP_m = BPHIGH_CrudePrev,
+    HBP_w = BPHIGH_Crude95CI_width,
+    HBP_med_m = BPMED_CrudePrev,
+    HBP_med_w = BPMED_Crude95CI_width,
+    Cancer_m = CANCER_CrudePrev,
+    Cancer_w = CANCER_Crude95CI_width,
+    Asthma_m = CASTHMA_CrudePrev,
+    Asthma_w = CASTHMA_Crude95CI_width,
+    CHD_m = CHD_CrudePrev,
+    CHD_w = CHD_Crude95CI_width,
+    Checkup_m = CHECKUP_CrudePrev,
+    Checkup_w = CHECKUP_Crude95CI_width,
+    Chol_screen_m = CHOLSCREEN_CrudePrev,
+    Chol_screen_w = CHOLSCREEN_Crude95CI_width,
+    Colon_screen_m = COLON_SCREEN_CrudePrev,
+    Colon_screen_w = COLON_SCREEN_Crude95CI_width,
+    COPD_m = COPD_CrudePrev,
+    COPD_w = COPD_Crude95CI_width,
+    Smoking_m = CSMOKING_CrudePrev,
+    Smoking_w = CSMOKING_Crude95CI_width,
+    Dental_m = DENTAL_CrudePrev,
+    Dental_w = DENTAL_Crude95CI_width,
+    Depression_m = DEPRESSION_CrudePrev,
+    Depression_w = DEPRESSION_Crude95CI_width,
+    Diabetes_m = DIABETES_CrudePrev,
+    Diabetes_w = DIABETES_Crude95CI_width,
+    General_hlth_m = GHLTH_CrudePrev,
+    General_hlth_w = GHLTH_Crude95CI_width,
+    High_chol_m = HIGHCHOL_CrudePrev,
+    High_chol_w = HIGHCHOL_Crude95CI_width,
+    No_PA_m = LPA_CrudePrev,
+    No_PA_w = LPA_Crude95CI_width,
+    Mammography_m = MAMMOUSE_CrudePrev,
+    Mammography_w = MAMMOUSE_Crude95CI_width,
+    Mental_distress_m = MHLTH_CrudePrev,
+    Mental_distress_w = MHLTH_Crude95CI_width,
+    Obesity_m = OBESITY_CrudePrev,
+    Obesity_w = OBESITY_Crude95CI_width,
+    Physical_distress_m = PHLTH_CrudePrev,
+    Physical_distress_w = PHLTH_Crude95CI_width,
+    Short_sleep_m = SLEEP_CrudePrev,
+    Short_sleep_w = SLEEP_Crude95CI_width,
+    Stroke_m = STROKE_CrudePrev,
+    Stroke_w = STROKE_Crude95CI_width,
+    Teeth_lost_m = TEETHLOST_CrudePrev,
+    Teeth_lost_w = TEETHLOST_Crude95CI_width,
+    Hearing_m = HEARING_CrudePrev,
+    Hearing_w = HEARING_Crude95CI_width,
+    Vision_m = VISION_CrudePrev,
+    Vision_w = VISION_Crude95CI_width,
+    Cognition_m = COGNITION_CrudePrev,
+    Cognition_w = COGNITION_Crude95CI_width,
+    Mobility_m = MOBILITY_CrudePrev,
+    Mobility_w = MOBILITY_Crude95CI_width,
+    Selfcare_m = SELFCARE_CrudePrev,
+    Selfcare_w = SELFCARE_Crude95CI_width,
+    Indep_living_m = INDEPLIVE_CrudePrev,
+    Indep_living_w = INDEPLIVE_Crude95CI_width,
+    Disability_m = DISABILITY_CrudePrev,
+    Disability_w = DISABILITY_Crude95CI_width,
+    Loneliness_m = LONELINESS_CrudePrev,
+    Loneliness_w = LONELINESS_Crude95CI_width,
+    Food_stamp_m = FOODSTAMP_CrudePrev,
+    Food_stamp_w = FOODSTAMP_Crude95CI_width,
+    Food_insecure_m = FOODINSECU_CrudePrev,
+    Food_insecure_w = FOODINSECU_Crude95CI_width,
+    House_insecure_m = HOUSINSECU_CrudePrev,
+    House_insecure_w = HOUSINSECU_Crude95CI_width,
+    Utility_threat_m = SHUTUTILITY_CrudePrev,
+    Utility_threat_w = SHUTUTILITY_Crude95CI_width,
+    Transport_lack_m = LACKTRPT_CrudePrev,
+    Transport_lack_w = LACKTRPT_Crude95CI_width,
+    Support_lack_m = EMOTIONSPT_CrudePrev,
+    Support_lack_w = EMOTIONSPT_Crude95CI_width
+  )
+```
+
+### Visualizations
+```{r histogram}
+df %>%
+  select(where(is.numeric) & ends_with("_m")) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(fill = "steelblue", color = "white", bins = 30) +
+  facet_wrap(~variable, scales = "free") + 
+  theme_minimal() +
+  labs(title = "Histograms of Numeric Variables", x = "Value", y = "Frequency")
+
+```
+```{r scatter_pairs}
+df %>%
+  pivot_longer(
+    cols = ends_with(c("_m", "_w")),
+    # (.*)  = Group 1: Match everything (the variable name)
+    # _     = The literal last underscore
+    # (.*)  = Group 2: Match the suffix (m or w)
+    names_to = c("variable", ".value"),
+    names_pattern = "(.*)_(.*)" 
+  ) %>%
+  ggplot(aes(x = m, y = w)) +
+  geom_point() +
+  facet_wrap(~variable, scales = "free") +
+  labs(
+    x = "Mean (Average)",
+    y = "Width (Spread)",
+    title = "Scatterplots of Mean vs. Width by Variable"
+  ) +
+  theme_bw()
+```
+```{r scatter_with_predictors}
+target <- "Stroke_m"
+
+df %>%
+  # 1. Select the target and all other '_m' columns
+  select(all_of(target), ends_with("_m")) %>%
+  # 2. Pivot everything EXCEPT the target into a long format
+  pivot_longer(
+    cols = -all_of(target),
+    names_to = "comparison_var",
+    values_to = "comparison_val"
+  ) %>%
+  # 3. Plot target on X and the other values on Y
+  ggplot(aes(y = .data[[target]], x = comparison_val)) +
+  geom_point(alpha = 0.01) +
+  facet_wrap(~comparison_var, scales = "free_y") +
+  labs(
+    y = paste("Reference:", target),
+    x = "Comparison Mean Values",
+    title = paste("Comparing", target, "to all other Means")
+  ) +
+  theme_minimal()
+```
+
+```{r boxplots}
+df %>%
+  select(where(is.numeric) & ends_with("_m")) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+  ggplot(aes(y = value, x = "")) +
+  geom_boxplot(fill = "orange", outlier.color = "red", outlier.shape = 1) +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Boxplots of Numeric Variables", y = "Value", x = NULL)
+
+```
+
+##Hypothesis
+We decided to have value of Stroke as target value. It is very serious outcome, and many people die, so we want to find out, what are the biggest risk factors, which could be improved if possible to have less people die. 
+Other possible targets include Depression, Cancer, CHD.
+
+The predictors we will use to diagnose this are decided by domain knowledge, logical thinking and comparison of correlations.
+
+
+We remove some columns right away as they could not haven influence on this, and they are: Colorectal cancer screening, visited dentist, general_health, 
+If person has a disability and also stroke, then there is not much that can be done for improvement in stroke risk.
+
+
+First we will make all correlations positive and group them by their category, and then find out which category has the highest influence on the target.
+
+
+### Feature scaling, ....
+
+```{r column_names}
+colnames(df)
+df <- df %>%
+  mutate(Adult_ratio = TotalPop18plus / TotalPopulation) %>%
+  select(-TotalPop18plus, -TotalPopulation)
+```
+
+```{r groups_define}
+feature_groups <- list(
+  Outcome = c("Arthritis_m", "HBP_m", "Cancer_m", "Asthma_m", "CHD_m", "COPD_m", "Depression_m", "Diabetes_m", "High_chol_m", "Obesity_m", "Stroke_m", "Teeth_lost_m"),
+  Preventive = c("Insurance_lack_m", "Checkup_m", "Chol_screen_m", "Colon_screen_m", "Dental_m", "Mammography_m", "HBP_med_m"),
+  Behavior = c("Drinking_m", "Short_sleep_m", "No_PA_m", "Smoking_m"),
+  Disability = c("Hearing_m", "Vision_m", "Cognition_m", "Mobility_m", "Selfcare_m", "Indep_living_m", "Disability_m"),
+  Social = c("Loneliness_m","Food_stamp_m","Food_insecure_m", "House_insecure_m", "Utility_threat_m", "Transport_lack_m","Support_lack_m"),
+  Status = c("General_hlth_m", "Physical_distress_m", "Mental_distress_m"),
+  Nonmedical = c("Adult_ratio", "Longitude", "Latitude")
 )
+```
+
+## Choosing models
+
+Hypothesis: Health outcomes have highest influence on general health (whether people say they have fair or poor health).
+
+First we need to find out, if there is severe multicollinearity among predictor columns.
+
+### Colinearity
+```{r color_colinearity}
+
+feature_to_color <- c(
+  setNames(rep("blue", length(feature_groups$Behavior)), feature_groups$Behavior),
+  setNames(rep("green", length(feature_groups$Preventive)), feature_groups$Preventive),
+  setNames(rep("black", length(feature_groups$Status)), feature_groups$Status),
+  setNames(rep("pink", length(feature_groups$Disability)), feature_groups$Disability),
+  setNames(rep("lightblue", length(feature_groups$Nonmedical)), feature_groups$Nonmedical),
+  setNames(rep("orange", length(feature_groups$Social)), feature_groups$Social),
+  setNames(rep("firebrick", length(feature_groups$Outcome)), feature_groups$Outcome)
+)
+
+plot_categorized_corr <- function(df, feature_map_colors) {
+  target_cols <- names(feature_map_colors)
+  cor_mat <- cor(df[, target_cols], use = "complete.obs")
+  
+  corrplot(cor_mat, 
+           method = "color", 
+           type = "upper",
+           tl.col = feature_map_colors[colnames(cor_mat)],
+           tl.srt = 45,
+           tl.cex = 0.6,
+           number.cex = 0.4,
+           addCoef.col = "black",
+           mar = c(0,0,1,0),
+           title = "Correlations")
+}
+
+# Usage:
+plot_categorized_corr(df, feature_to_color)
+```
+
+
+
+## Modeling
+
+```{r skewness_values}
+
+df_model <- df %>%
+  select(all_of(selected_cols)) %>%
+  na.omit()
+
+
+df_model %>%
+  summarise(across(everything(), ~round(skewness(.x), 3))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Skewness") %>%
+  arrange(desc(abs(Skewness))) %>%
+  print(n = Inf)
+
+
+plot_list <- lapply(selected_cols, function(col) {
+  ggplot(df, aes(x = .data[[col]])) +
+    geom_histogram(fill = "skyblue", color = "black", bins = 30) +
+    labs(title = paste("Histogram of", col), x = col, y = "Frequency") +
+    theme_minimal()
+})
+
+wrap_plots(plot_list)
+
+```
+
+
+
+```{r model_preparation}
+selected_cols <- c(
+  "Stroke_m",
+  "Smoking_m",
+  "Drinking_m",
+  "No_PA_m",
+  "Short_sleep_m",
+  "Stroke_w",
+  "Smoking_w",
+  "Drinking_w",
+  "No_PA_w",
+  "Short_sleep_w"
+)
+df_model <- df %>%
+  select(all_of(selected_cols)) %>%
+  na.omit()
+
+data_split <- initial_split(df_model, prop = 0.8)
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+cat("Train:", nrow(train_data), "\n")
+cat("Test:", nrow(test_data), "\n")
+
+formula <- Stroke_m ~ Smoking_m + Drinking_m + No_PA_m + Short_sleep_m
+
+```
+```{r pairplot}
+pairs(df_model[, selected_cols], 
+    main = "Scatter Plot Matrix",
+    pch = 19,
+    cex = 0.02,   
+    col = "steelblue")
+
+```
+
+### Linear regression
+
+#### Conditions
+To use linear regression, we need to make sure that there are linear relationships between target and predictors, there should homoscedasticity, no extreme outliers, there should be no severe multicollinearity, feature scaling might help.
+
+```{r skewness_p}
+skewness_df <- df_model %>%
+  summarise(across(everything(), ~ skewness(.x, na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Skewness") %>%
+  arrange(desc(abs(Skewness)))
+print(skewness_df)
+
+```
+
+
+```{r homeost}
+model <- lm(formula, data = train_data)
+summary(model)
+confint(model)
+
+lm_preds <- predict(model, test_data)
+lm_performance <- postResample(pred = lm_preds, obs = test_data$Stroke_m)
+lm_performance
+
+par(mfrow = c(2, 2))
+plot(model)
+par(mfrow = c(1, 1))
+```
+
+```{r with_weights}
+
+df_model <- df_model %>%
+  mutate(total_variance = Smoking_w^2 + Drinking_w^2 + No_PA_w^2 + Short_sleep_w^2,
+         weight_val = 1 / total_variance)
+
+weighted_model <- lm(Stroke_m ~ Smoking_m + Drinking_m + No_PA_m + Short_sleep_m, 
+                     data = df_model, 
+                     weights = weight_val)
+
+summary(weighted_model)
+```
+There are some unexpected results, the model tells us that the more people drink and less sleep, the lower chance they have of a stroke. This could be because there are more younger people in that specific area - they have generally lower chance of having had stroke in their life till now, and also they probably drink more and sleep less. 
+
+
+### Polynomial regression
+```{r log_homeos}
+model_quad <- lm(log(General_hlth_m) ~ poly(Obesity_m, 2) + Smoking_m, data = df_model)
+plot(model_quad, which = 1)
+```
+
+
+
+
+
+### KNN
+
+
+```{r knn}
+knn_fit <- knnreg(
+  formula, 
+  data = train_data, 
+  k = 10,
+  preProcess = c("center", "scale")
+)
+
+#knn_smart_model <- train(
+#  Stroke_m ~ Smoking_m + Drinking_m + No_PA_m + Short_sleep_m, 
+#  data = train_data,
+#  method = "knn",
+#  preProcess = c("center", "scale"),
+#  tuneGrid = expand.grid(k = 1:20) # This tests k from 1 to 20
+#)
+
+test_predictions <- predict(knn_fit, test_data)
+
+knn_performance <- postResample(pred = test_predictions, obs = test_data$Stroke_m)
+print(knn_performance)
+
+importance <- filterVarImp(x = train_data[, c("Smoking_m", "Drinking_m", "No_PA_m", "Short_sleep_m")], 
+                           y = train_data$Stroke_m)
+print(importance)
+
+test_results <- test_data %>%
+  mutate(predictions = test_predictions)
+
+ggplot(test_results, aes(x = Stroke_m, y = predictions)) +
+  geom_point(alpha = 0.3, color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "k-NN Performance: Actual vs. Predicted Stroke Risk",
+       x = "Actual Stroke %",
+       y = "k-NN Predicted %") +
+  theme_minimal()
+
+```
+
+
+### Random tree 
+```{r random_tree}
+library(rpart)
+tree_model <- rpart(
+  GHLTH_CrudePrev ~ ., data = train, method = "anova",
+  control = rpart.control(cp = 0.001, maxdepth = 6)
+)
+
+rpart.plot(tree_model, type = 4, extra = 101, roundint = FALSE,
+           main = "Decision Tree - before pruning")
+
+printcp(tree_model)
+best_cp <- tree_model$cptable[which.min(tree_model$cptable[, "xerror"]), "CP"]
+tree_pruned <- prune(tree_model, cp = best_cp)
+
+rpart.plot(tree_pruned, type = 4, extra = 101, roundint = FALSE,
+           main = "Decision Tree - pruned")
+
+pred_tree <- predict(tree_pruned, newdata = test)
+results$tree <- tibble(Model = "Decision Tree",
+                       RMSE = rmse(test$GHLTH_CrudePrev, pred_tree),
+                       MAE = mae(test$GHLTH_CrudePrev, pred_tree),
+                       R2 = r2(test$GHLTH_CrudePrev, pred_tree))
+```
+
+
+
+### Random forest
+```{r randomforest}
+rf_model <- randomForest(
+  formula, 
+  data = train_data,
+  ntree = 300, 
+  mtry = 3, 
+  importance = TRUE,
+  na.action = na.omit
+)
+
+rf_preds <- predict(rf_model, test_data)
+
+rf_performance <- postResample(pred = rf_preds, obs = test_data$Stroke_m)
+print(rf_performance)
+
+importance_df <- as.data.frame(importance(rf_model))
+varImpPlot(rf_model, main = "Random Forest: Variable Importance")
+```
+
+
+## Model comparison
+```{r model_comparison}
+model_comparison <- data.frame(
+  
+  Model = c("Linear Regression", "k-NN", "Random Forest"),
+  RMSE = c(lm_performance[1], knn_performance[1], rf_performance[1]),
+  Rsquared = c(lm_performance[2], knn_performance[2], rf_performance[2])
+)
+
+print(model_comparison)
+
 ```

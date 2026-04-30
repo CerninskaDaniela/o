@@ -724,8 +724,73 @@ selected_cols <- c(
   "Short_sleep_w"
 )
 
+selected_cols_medical <- c(
+  "Stroke_m",
+  "Smoking_m",
+  "Drinking_m",
+  "No_PA_m",
+  "Short_sleep_m",
+  "HBP_m",
+  "HBP_med_m",
+  "CHD_m",
+  "High_chol_m",
+  "Diabetes_m",
+  "Obesity_m",
+  "Stroke_w",
+  "Smoking_w",
+  "Drinking_w",
+  "No_PA_w",
+  "Short_sleep_w",
+  "HBP_w",
+  "HBP_med_w",
+  "CHD_w",
+  "High_chol_w",
+  "Diabetes_w",
+  "Obesity_w"
+)
+
+selected_cols_A <- c(
+  "Stroke_m",
+  "Smoking_m",
+  "Drinking_m",
+  "No_PA_m",
+  "Short_sleep_m"
+)
+
+selected_cols_E <- c(
+  "Stroke_m",
+
+  "Smoking_m",
+  "Drinking_m",
+  "No_PA_m",
+  "Short_sleep_m",
+
+  "HBP_m",
+  "HBP_med_m",
+  "CHD_m",
+  "Diabetes_m",
+  "High_chol_m",
+  "Obesity_m",
+
+  "Food_stamp_m",
+  "Insurance_lack_m",
+  "Food_insecure_m",
+
+  "Stroke_w",
+  "Smoking_w",
+  "Drinking_w",
+  "No_PA_w",
+  "Short_sleep_w",
+  "HBP_w",
+  "HBP_med_w",
+  "CHD_w",
+  "Diabetes_w",
+  "High_chol_w",
+  "Obesity_w"
+)
+
 df_model <- df %>%
-  select(all_of(selected_cols)) %>%
+  select(all_of(selected_cols_E)) %>%
   na.omit()
 
 set.seed(42)
@@ -738,8 +803,11 @@ test_data  <- testing(data_split)
 cat("Train:", nrow(train_data), "\n")
 cat("Test:", nrow(test_data), "\n")
 
-formula <- Stroke_m ~ Smoking_m + Drinking_m + No_PA_m + Short_sleep_m +
-  Stroke_w + Smoking_w + Drinking_w + No_PA_w + Short_sleep_w
+predictor_cols <- setdiff(selected_cols_A, "Stroke_m")
+
+formula <- as.formula(
+  paste("Stroke_m ~", paste(predictor_cols, collapse = " + "))
+)
 ```
 
 ### Parametric
@@ -895,4 +963,54 @@ svr_performance <- postResample(
 
 print(svr_performance)
 ```
+### Comparison
+```{r}
+model_comparison <- data.frame(
+  Model = c(
+    "Linear Regression",
+    "Bayesian Linear Regression",
+    "Ridge Regression",
+    "k-NN Tuned",
+    "Decision Tree Tuned",
+    "SVR Tuned"
+  ),
+  RMSE = c(
+    lm_performance["RMSE"],
+    bayes_performance["RMSE"],
+    ridge_performance["RMSE"],
+    knn_performance["RMSE"],
+    tree_performance["RMSE"],
+    svr_performance["RMSE"]
+  ),
+  Rsquared = c(
+    lm_performance["Rsquared"],
+    bayes_performance["Rsquared"],
+    ridge_performance["Rsquared"],
+    knn_performance["Rsquared"],
+    tree_performance["Rsquared"],
+    svr_performance["Rsquared"]
+  ),
+  MAE = c(
+    lm_performance["MAE"],
+    bayes_performance["MAE"],
+    ridge_performance["MAE"],
+    knn_performance["MAE"],
+    tree_performance["MAE"],
+    svr_performance["MAE"]
+  )
+) %>%
+  arrange(RMSE)
 
+print(model_comparison)
+
+```
+```{r}
+baseline_comparison3 <- model_comparison
+print(baseline_comparison2)
+
+write.csv(
+  baseline_comparison3,
+  "baseline_model_comparison3.csv",
+  row.names = FALSE
+)
+```

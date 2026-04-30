@@ -750,20 +750,7 @@ summary(weighted_model)
 ```
 There are some unexpected results, the model tells us that the more people drink and less sleep, the lower chance they have of a stroke. This could be because there are more younger people in that specific area - they have generally lower chance of having had stroke in their life till now, and also they probably drink more and sleep less. 
 
-
-### Polynomial regression
-```{r log_homeos}
-model_quad <- lm(log(General_hlth_m) ~ poly(Obesity_m, 2) + Smoking_m, data = df_model)
-plot(model_quad, which = 1)
-```
-
-
-
-
-
 ### KNN
-
-
 ```{r knn}
 knn_fit <- knnreg(
   formula, 
@@ -864,428 +851,176 @@ print(model_comparison)
 
 ```
 
-## Scenario 2
-```{r model_preparation}
-selected_cols <- c(
-  "Stroke_m",
-  "Smoking_m",
-  "Drinking_m",
-  "No_PA_m",
-  "Short_sleep_m",
-  "Stroke_w",
-  "Smoking_w",
-  "Drinking_w",
-  "No_PA_w",
-  "Short_sleep_w"
-)
-
-selected_cols_medical <- c(
-  "Stroke_m",
-  "Smoking_m",
-  "Drinking_m",
-  "No_PA_m",
-  "Short_sleep_m",
-  "HBP_m",
-  "HBP_med_m",
-  "CHD_m",
-  "High_chol_m",
-  "Diabetes_m",
-  "Obesity_m",
-  "Stroke_w",
-  "Smoking_w",
-  "Drinking_w",
-  "No_PA_w",
-  "Short_sleep_w",
-  "HBP_w",
-  "HBP_med_w",
-  "CHD_w",
-  "High_chol_w",
-  "Diabetes_w",
-  "Obesity_w"
-)
-
-selected_cols_A <- c(
-  "Stroke_m",
-  "Smoking_m",
-  "Drinking_m",
-  "No_PA_m",
-  "Short_sleep_m"
-)
-
-selected_cols_E <- c(
-  "Stroke_m",
-
-  "Smoking_m",
-  "Drinking_m",
-  "No_PA_m",
-  "Short_sleep_m",
-
-  "HBP_m",
-  "HBP_med_m",
-  "CHD_m",
-  "Diabetes_m",
-  "High_chol_m",
-  "Obesity_m",
-
-  "Food_stamp_m",
-  "Insurance_lack_m",
-  "Food_insecure_m",
-
-  "Smoking_w",
-  "Drinking_w",
-  "No_PA_w",
-  "Short_sleep_w",
-  "HBP_w",
-  "HBP_med_w",
-  "CHD_w",
-  "Diabetes_w",
-  "High_chol_w",
-  "Obesity_w"
-)
-
-selected_cols_F2 <- c(
-  "Stroke_m",
-
-  "HBP_m",
-  "HBP_med_m",
-  "Diabetes_m",
-  "CHD_m",
-  "Smoking_m",
-  "No_PA_m",
-
-  "Stroke_w",
-  "HBP_w",
-  "HBP_med_w",
-  "Diabetes_w",
-  "CHD_w",
-  "Smoking_w",
-  "No_PA_w"
-)
-
-selected_cols_F <- c(
-  "Stroke_m",
-  "Diabetes_m",   # r = 0.944 with Stroke_m — strongest causal risk factor
-  "HBP_m",        # r = 0.910 — high blood pressure, primary modifiable risk factor
-  "CHD_m",        # r = 0.914 — coronary heart disease shares vascular pathology
-  "Obesity_m",    # r = 0.636 — modifiable behavioral/metabolic risk
-  "Smoking_m",    # r = 0.728 — strongest behavioral risk factor for stroke
-  "No_PA_m"       # r = 0.787 — lack of physical activity, independently modifiable
-)
-
-selected_cols_G <- c(
-  "Stroke_m",
-
-  "Diabetes_m",
-  "HBP_m",
-  "CHD_m",
-  "Obesity_m",
-  "Smoking_m",
-  "No_PA_m",
-
-  "Stroke_w",
-  "Diabetes_w",
-  "HBP_w",
-  "CHD_w",
-  "Obesity_w",
-  "Smoking_w",
-  "No_PA_w"
-)
-
-selected_cols_H <- c(
-  "Stroke_m",
-
-  "Smoking_m",
-  "Drinking_m",
-  "No_PA_m",
-  "Short_sleep_m",
-
-  "HBP_m",
-  "HBP_med_m",
-  "CHD_m",
-  "Diabetes_m",
-  "High_chol_m",
-  "Obesity_m",
-
-  "Food_stamp_m",
-  "Insurance_lack_m",
-  "Food_insecure_m"
-)
-
-selected_cols_I <- c(
-  "Stroke_m",
-
-  "Smoking_m",
-  "Drinking_m",
-  "No_PA_m",
-  "Short_sleep_m",
-
-  "HBP_m",
-  "HBP_med_m",
-  "CHD_m",
-  "Diabetes_m",
-  "High_chol_m",
-  "Obesity_m",
-
-  "Stroke_w",
-  "Smoking_w",
-  "Drinking_w",
-  "No_PA_w",
-  "Short_sleep_w",
-  "HBP_w",
-  "HBP_med_w",
-  "CHD_w",
-  "Diabetes_w",
-  "High_chol_w",
-  "Obesity_w"
-)
-
-selected_cols_J <- c(
-  "Stroke_m",
-  "HBP_m",
-  "HBP_med_m",
-  "CHD_m",
-  "Diabetes_m",
-  "High_chol_m",
-  "Obesity_m"
-)
-
-selected_cols_K <- c(
-  "Stroke_m",
-  "HBP_m",
-  "HBP_med_m",
-  "CHD_m",
-  "Diabetes_m",
-  "High_chol_m",
-  "Obesity_m",
-  "Food_stamp_m",
-  "Insurance_lack_m",
-  "Food_insecure_m"
-)
-
-selected_cols <- selected_cols_E
-
-df_model <- df %>%
-  select(all_of(selected_cols)) %>%
-  na.omit()
-
-set.seed(42)
-
+## Train / test split
+```{r split}
 data_split <- initial_split(df_model, prop = 0.8)
-
 train_data <- training(data_split)
-test_data  <- testing(data_split)
+test_data <- testing(data_split)
 
 cat("Train:", nrow(train_data), "\n")
 cat("Test:", nrow(test_data), "\n")
 
-predictor_cols <- setdiff(selected_cols, "Stroke_m")
-
-formula <- as.formula(
-  paste("Stroke_m ~", paste(predictor_cols, collapse = " + "))
-)
+formula_stroke <- Stroke_m ~ Diabetes_m + CHD_m + No_PA_m + Smoking_m + Obesity_m + Short_sleep_m
 ```
 
-### Parametric
-#### Linear Regression
-```{r}
-lm_model <- lm(formula, data = train_data)
-
-summary(lm_model)
-confint(lm_model)
-
-lm_preds <- predict(lm_model, newdata = test_data)
-
-lm_performance <- postResample(
-  pred = lm_preds,
-  obs = test_data$Stroke_m
-)
-
-print(lm_performance)
-
-par(mfrow = c(2,2))
-plot(lm_model)
-par(mfrow = c(1,1))
+```{r pairplot}
+pairs(df_model,
+      pch = 19, cex = 0.03, col = "steelblue",
+      main = "Pairplot - modeling features after preprocessing")
 ```
-#### Bayesian Linear Regression
-```{r}
+The pairplot indicates that the selected predictors are suitable for modeling `Stroke_m`. The clearest positive relationships are visible for `Diabetes_m` and `CHD_m`, which supports their role as the strongest predictors of stroke prevalence. Behavioral variables such as `No_PA_m`, `Smoking_m`, `Obesity_m`, and `Short_sleep_m` also show positive associations, although with more variability.
+
+Several predictors are correlated with each other, especially diabetes, coronary heart disease, physical inactivity, and obesity. This suggests moderate multicollinearity, which is expected in health data and is evaluated using VIF. Since the relationships are mostly monotonic and approximately linear, linear models are appropriate, while the visible scatter and mild nonlinearity also justify testing flexible nonparametric models.
+
+# Scenario 2
+Parametric models assume a **fixed linear functional form**: Stroke_m ≈ β₀ + β₁·Diabetes + β₂·CHD + … + ε. They estimate a finite, fixed number of coefficients. This makes them interpretable and statistically efficient when assumptions hold.
+## Parametric models
+### 1. Bayesian Linear Regression
+#### Assumptions
+Bayesian Linear Regression has the same basic structure as ordinary linear regression, so we checked the same assumptions. The pairplot showed approximately linear positive relationships between `Stroke_m` and the selected predictors, especially `Diabetes_m` and `CHD_m`. Observations represent separate ZCTA areas, so independence is assumed by the data structure. VIF analysis showed moderate multicollinearity between some health-related predictors, but no VIF exceeded 10, so severe multicollinearity was not present. Extreme outliers were reduced using the conservative 3×IQR rule. Residual diagnostics were inspected using the standard linear model diagnostic plots; minor deviations from perfect normality or constant variance are acceptable here because the main objective is prediction, evaluated by test-set RMSE, MAE and R².
+
+```{r bayesian_fit}
 bayes_model <- bayesglm(
-  formula,
+  formula_stroke,
   data = train_data,
   family = gaussian()
 )
-
 summary(bayes_model)
-
-bayes_preds <- predict(bayes_model, newdata = test_data)
-
-bayes_performance <- postResample(
-  pred = bayes_preds,
-  obs = test_data$Stroke_m
-)
-
-print(bayes_performance)
 ```
-#### Ridge Regression
-```{r}
-x_train <- model.matrix(formula, train_data)[,-1]
-y_train <- train_data$Stroke_m
+```{r bayesian_diagnostics}
+lm_diag <- lm(formula_stroke, data = train_data)
 
-x_test <- model.matrix(formula, test_data)[,-1]
+par(mfrow = c(2, 2))
+plot(lm_diag)
+par(mfrow = c(1, 1))
+```
+#### 2. Ridge Regression
+#### Assumptions
+
+Ridge adds an **L2 penalty** (λ·Σβⱼ²) to the OLS loss function. This shrinks all coefficients toward zero simultaneously, which directly addresses the moderate multicollinearity we observed between `Diabetes_m`, `No_PA_m`, and `CHD_m`. It trades a small increase in bias for potentially large reduction in variance.
+
+Assumptions:
+- **Linearity**, **independence**, **homoscedasticity**, **normality of residuals** — same as OLS.
+- **Feature scaling required** — the L2 penalty treats all coefficients equally; without standardization, variables on different scales would be penalized unequally. We set `standardize = TRUE`.
+- **λ** controls regularization strength. λ = 0 reduces to OLS; larger λ → stronger shrinkage. We select λ by **10-fold cross-validation** minimizing MSE.
+- Coefficients approach but never reach exactly zero — Ridge retains all predictors.
+
+```{r ridge_fit}
+X_train <- model.matrix(formula_stroke, data = train_data)[, -1]
+y_train <- train_data$Stroke_m
+X_test  <- model.matrix(formula_stroke, data = test_data)[, -1]
 
 ridge_cv <- cv.glmnet(
-  x_train,
-  y_train,
+  X_train, y_train,
   alpha = 0,
-  standardize = TRUE
+  standardize = TRUE,
+  nfolds = 10
 )
 
 plot(ridge_cv)
+title("Ridge: CV MSE vs log(λ)", line = 3)
 
-best_lambda <- ridge_cv$lambda.min
-cat("Best lambda:", best_lambda, "\n")
-
-ridge_preds <- predict(ridge_cv, s = best_lambda, newx = x_test)
-ridge_preds <- as.numeric(ridge_preds)
-
-ridge_performance <- postResample(
-  pred = ridge_preds,
-  obs = test_data$Stroke_m
-)
-
-print(ridge_performance)
+cat("Best lambda (min CV error):", round(ridge_cv$lambda.min, 5), "\n")
+cat("Best lambda (1-SE rule):   ", round(ridge_cv$lambda.1se, 5), "\n")
 ```
-### Non-Parametric
-#### k-NN regression
-```{r}
-train_ctrl <- trainControl(method = "cv", number = 5)
 
-knn_model <- train(
-  formula,
-  data = train_data,
-  method = "knn",
-  preProcess = c("center", "scale"),
-  tuneGrid = expand.grid(k = c(3,5,6,10,15,20)),
-  trControl = train_ctrl,
-  metric = "RMSE"
-)
+```{r ridge_coefs}
+ridge_coef_mat <- as.matrix(coef(ridge_cv, s = "lambda.min"))
 
-print(knn_model)
-plot(knn_model)
-
-knn_preds <- predict(knn_model, newdata = test_data)
-
-knn_performance <- postResample(
-  pred = knn_preds,
-  obs = test_data$Stroke_m
-)
-
-print(knn_performance)
-```
-#### Decision tree regression
-```{r}
-tree_model_full <- rpart(
-  formula,
-  data = train_data,
-  method = "anova",
-  control = rpart.control(cp = 0.0001, maxdepth = 8)
-)
-
-rpart.plot(tree_model_full, type = 4, extra = 101, roundint = FALSE,
-           main = "Decision Tree Before Pruning")
-
-printcp(tree_model_full)
-
-best_cp <- tree_model_full$cptable[
-  which.min(tree_model_full$cptable[, "xerror"]),
-  "CP"
-]
-
-cat("Best cp:", best_cp, "\n")
-
-tree_model_pruned <- prune(tree_model_full, cp = best_cp)
-
-rpart.plot(tree_model_pruned, type = 4, extra = 101, roundint = FALSE,
-           main = "Decision Tree After Pruning")
-
-tree_preds <- predict(tree_model_pruned, newdata = test_data)
-
-tree_performance <- postResample(
-  pred = tree_preds,
-  obs = test_data$Stroke_m
-)
-
-print(tree_performance)
-```
-```{r}
-svr_model <- svm(
-  formula,
-  data = train_data,
-  type = "eps-regression",
-  kernel = "radial",
-  cost = 1,
-  gamma = 0.1,
-  scale = TRUE
-)
-
-print(svr_model)
-
-svr_preds <- predict(svr_model, newdata = test_data)
-
-svr_performance <- postResample(
-  pred = svr_preds,
-  obs = test_data$Stroke_m
-)
-
-print(svr_performance)
-```
-### Comparison
-```{r}
-model_comparison <- data.frame(
-  Model = c(
-    "Linear Regression",
-    "Bayesian Linear Regression",
-    "Ridge Regression",
-    "k-NN Tuned",
-    "Decision Tree Tuned",
-    "SVR Tuned"
-  ),
-  RMSE = c(
-    lm_performance["RMSE"],
-    bayes_performance["RMSE"],
-    ridge_performance["RMSE"],
-    knn_performance["RMSE"],
-    tree_performance["RMSE"],
-    svr_performance["RMSE"]
-  ),
-  Rsquared = c(
-    lm_performance["Rsquared"],
-    bayes_performance["Rsquared"],
-    ridge_performance["Rsquared"],
-    knn_performance["Rsquared"],
-    tree_performance["Rsquared"],
-    svr_performance["Rsquared"]
-  ),
-  MAE = c(
-    lm_performance["MAE"],
-    bayes_performance["MAE"],
-    ridge_performance["MAE"],
-    knn_performance["MAE"],
-    tree_performance["MAE"],
-    svr_performance["MAE"]
-  )
+ridge_coef_df <- data.frame(
+  Term = rownames(ridge_coef_mat),
+  Coefficient = as.numeric(ridge_coef_mat[, 1])
 ) %>%
-  arrange(RMSE)
+  filter(Term != "(Intercept)") %>%
+  arrange(desc(abs(Coefficient)))
 
-print(model_comparison)
+print(ridge_coef_df)
 
+ggplot(ridge_coef_df, aes(x = reorder(Term, abs(Coefficient)),
+                          y = Coefficient,
+                          fill = Coefficient > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "tomato")) +
+  theme_minimal() +
+  labs(
+    title = "Ridge: Coefficient magnitudes at lambda.min",
+    x = NULL,
+    y = "Coefficient")
 ```
-```{r}
-baseline_comparison4 <- model_comparison
-print(baseline_comparison4)
+```{r ridge_predict}
+ridge_preds <- as.numeric(predict(ridge_cv, s = "lambda.min", newx = X_test))
 
-write.csv(
-  baseline_comparison4,
-  "baseline_model_comparison4.csv",
-  row.names = FALSE
+ggplot(data.frame(obs = test_data$Stroke_m, pred = ridge_preds),
+       aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.15, size = 0.6, color = "darkred") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(title = "Ridge Regression: Actual vs Predicted",
+       x = "Actual Stroke %", y = "Predicted Stroke %")
+ridge_perf <- postResample(pred = ridge_preds, obs = test_data$Stroke_m)
+ridge_perf
+```
+#### Lasso Regression
+#### Assumptions
+
+Lasso adds an **L1 penalty** (λ·Σ|βⱼ|) instead of L2. The key difference: the L1 penalty produces **sparse solutions** — it can set some coefficients to exactly zero, performing automatic feature selection. This is particularly valuable here because `Short_sleep_m` has the weakest correlation with Stroke_m (r = 0.40) and the Lasso can shrink it to zero if it does not contribute independently.
+
+Assumptions:
+- **Linearity**, **independence**, **homoscedasticity**, **normality of residuals** — same as Ridge.
+- **Feature scaling required** — same reason as Ridge.
+- **λ** selected by **10-fold cross-validation**.
+- Unlike Ridge, Lasso handles collinearity by selecting one feature from a correlated group and zeroing out the others — useful given the `Diabetes_m`/`No_PA_m` correlation.
+
+```{r lasso_fit}
+lasso_cv <- cv.glmnet(
+  X_train, y_train,
+  alpha = 1,
+  standardize = TRUE,
+  nfolds = 10
 )
+
+plot(lasso_cv)
+title("Lasso: CV MSE vs log(λ)", line = 3)
+
+cat("Best lambda (min CV error):", round(lasso_cv$lambda.min, 5), "\n")
+cat("Best lambda (1-SE rule):", round(lasso_cv$lambda.1se, 5), "\n")
 ```
+```{r lasso_coefs}
+lasso_coef_mat <- as.matrix(coef(lasso_cv, s = "lambda.min"))
+
+lasso_coef_df <- data.frame(
+  Term = rownames(lasso_coef_mat),
+  Coefficient = as.numeric(lasso_coef_mat[, 1])
+) %>%
+  filter(Term != "(Intercept)") %>%
+  arrange(desc(abs(Coefficient)))
+
+print(lasso_coef_df)
+
+# Which predictors did Lasso zero out?
+zeroed <- lasso_coef_df %>%
+  filter(abs(Coefficient) < 1e-8) %>%
+  pull(Term)
+
+if (length(zeroed) > 0) {
+  cat("Lasso zeroed out:", paste(zeroed, collapse = ", "), "\n")
+} else {
+  cat("Lasso retained all predictors at lambda.min\n")
+}
+
+ggplot(lasso_coef_df, aes(x = reorder(Term, abs(Coefficient)),
+                          y = Coefficient,
+                          fill = Coefficient > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "tomato")) +
+  theme_minimal() +
+  labs(
+    title = "Lasso: Coefficient magnitudes at lambda.min",
+    x = NULL,
+    y = "Coefficient",
+    subtitle = "Zero coefficients = excluded by Lasso"
+  )
+```
+## Nonparametric models

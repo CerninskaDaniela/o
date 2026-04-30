@@ -1,5 +1,5 @@
 ---
-title: "oznal"
+title: "OZNAL - Health Outcomes Analysis - PLACES Dataset"
 output: html_document
 date: "2026-04-27"
 ---
@@ -9,18 +9,19 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-```{r tidymodel_install}
-install.packages("rlang")
-install.packages("recipes")
-install.packages("parsnip")
-install.packages("kknn")
-install.packages("arm")
-install.packages("glmnet")
-install.packages("rpart")
-install.packages("rpart.plot")
+```{r install_packages, eval=FALSE}
+install.packages(c(
+  "tidyverse", "rsample", "caret", "corrplot", "patchwork",
+  "glmnet", "arm", "rpart", "rpart.plot", "e1071",
+  "gbm", "earth", "car", "ggcorrplot"
+))
+```
+
+```{r libraries}
 library(rlang)
 library(recipes)
 library(parsnip)
+library(corrplot)
 library(workflows)
 library(tune)
 library(dials)
@@ -29,9 +30,6 @@ library(glmnet)
 library(arm)
 library(rpart)
 library(rpart.plot)
-```
-
-```{r import_libs, echo=FALSE}
 library(dplyr)
 library(tibble)
 library(corrplot)
@@ -44,36 +42,54 @@ library(e1071)
 library(caret)
 library(conflicted)
 library(rsample)
+library(ggcorrplot)
+library(car)
+
 conflicts_prefer(dplyr::filter) 
 conflicts_prefer(tidyr::extract) 
 
 set.seed(42)
-
 ```
 
 ```{r load_data}
 df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260423.csv")
 ```
-
-fff
-
 ## Hypotheses
 
-Preventive practices have influence on health outcomes. Health risk behavior has bad influence on health outcomes. Health related-social needs have influence on health outcomes. The highest risk factor for stroke is high-blood pressure and taking medicine for it and obesity, cholesterol screening, coronary heart disease. Smoking is highest risk factor for asthma and cancer. Highest influence on all-teeth lost is by smoking, diagnosed diabetes, visited dentist. Obesity is most influenced by smoking, binge drinking, lack of leisure-time physical activity. Disability is influenced by health-risk behavior and social-related social needs. Health outcomes have the highest influence on self-reported health status from all other categories. Health-related social needs and health outcomes have high influence on depression. Is it important to solve loneliness? Which is the most cost effective improvement - which has highest risk and could be solved most cheaply? ...
+We target **stroke prevalence** ('Stroke_m') as it is a severe, often fatal outcome with well-documented, modifiable risk factors. We hypothesize that:
 
-### Scenarios
+- Metabolic conditions (diabetes, coronary hearth disease) are strongest predictors of area-level stroke prevalence.
+- Behavioral factors (smoking, physical inactivity, obesiry, sleep deprivation) contribute independently.
+- After controlling for metabolic conditions, behavioral predictors explain residual variance.
+
+**Scenario 2 - Parametric regression:** Bayesian Linear Regression, Ridge Regression, Lasso Regression. These assume a linear functional form and estimate a fixed number of parameters.
+**Scenario 2 - Nonparametric regression:** Support Vector Regression, Gradient Boosting Regression, MARS. These make no assumption about functional form and can capture non-linear relationships.
+
+##Hypothesis
+We decided to have value of Stroke as target value. It is very serious outcome, and many people die, so we want to find out, what are the biggest risk factors, which could be improved if possible to have less people die. 
+Other possible targets include Depression, Cancer, CHD.
+
+The predictors we will use to diagnose this are decided by domain knowledge, logical thinking and comparison of correlations.
+
+
+We remove some columns right away as they could not haven influence on this, and they are: Colorectal cancer screening, visited dentist, general_health, 
+If person has a disability and also stroke, then there is not much that can be done for improvement in stroke risk.
+
+
+First we will make all correlations positive and group them by their category, and then find out which category has the highest influence on the target.
+
 
 ## Exploratory data analysis
-
-### Size
+### Inspecting data 
 
 We need to find out the size of the dataset and the names of columns:
 
 ```{r size, include=TRUE}
 dim(df)
+```
+```{r size, include=TRUE}
 colnames(df)
 ```
-
 We can see that there are columns ZCTA5 - this is unique id value for a row, which identifies area from which values of parameters are measured. There are columns for population and population over 18, and also geolocation. Other columns which have the main values are paired up, the one ending with \_crudePrev show average of that value in an area, and the ones ending with \_CI show two values, which mean that there is 95% confidence that value is somewhere in this interval.
 
 ### Data formats
@@ -92,8 +108,7 @@ df <- df %>%
   }))
 ```
 
-We also need to solve the problem with CI columns.
-
+We also need to solve the problem with CI columns. The 95% CI columns arrive as character signs `"(low, high)"`. 
 ```{r ci_columns, include=TRUE}
 ci_cols <- names(df)[grep("_Crude95CI", names(df))]
 
@@ -160,7 +175,7 @@ df <- df %>%
 
 ```
 
-
+Extracting geolocation.
 
 ```{r geolocation_col, include=TRUE}
 
@@ -217,9 +232,7 @@ df %>%
   count(na_per_row) %>%
   mutate(percentage = (n / sum(n)) * 100)
 
-
 ```
-
 ```{r complete_cases}
 df %>%
   filter(complete.cases(.)) %>%
@@ -249,7 +262,7 @@ ggplot(df_viz, aes(x = Longitude, y = Latitude, color = na_percent)) +
 
 We can see that the missing values are influenced by states from which they are collected. For this reason, we will not remove all the missing rows, because for many of states we would completely lose all the information. If later there are features we need missing, we will deal with it.
 
-###Column names
+### Column names
 
 We need to rename columns as some names are not informative enough.
 
@@ -353,27 +366,28 @@ df %>%
   facet_wrap(~variable, scales = "free") + 
   theme_minimal() +
   labs(title = "Histograms of Numeric Variables", x = "Value", y = "Frequency")
-
 ```
 ```{r scatter_pairs}
 df %>%
   pivot_longer(
     cols = ends_with(c("_m", "_w")),
-    # (.*)  = Group 1: Match everything (the variable name)
-    # _     = The literal last underscore
-    # (.*)  = Group 2: Match the suffix (m or w)
     names_to = c("variable", ".value"),
-    names_pattern = "(.*)_(.*)" 
+    names_pattern = "(.*)_(.*)"
   ) %>%
+  filter(is.finite(m), is.finite(w)) %>%
   ggplot(aes(x = m, y = w)) +
-  geom_point() +
-  facet_wrap(~variable, scales = "free") +
+  geom_point(alpha = 0.08, size = 0.3) +
+  facet_wrap(~variable, scales = "free", ncol = 6) +
   labs(
     x = "Mean (Average)",
     y = "Width (Spread)",
     title = "Scatterplots of Mean vs. Width by Variable"
   ) +
-  theme_bw()
+  theme_bw() +
+  theme(
+    strip.text = element_text(size = 8),
+    axis.text = element_text(size = 6)
+  )
 ```
 ```{r scatter_with_predictors}
 target <- "Stroke_m"
@@ -411,21 +425,162 @@ df %>%
 
 ```
 
-##Hypothesis
-We decided to have value of Stroke as target value. It is very serious outcome, and many people die, so we want to find out, what are the biggest risk factors, which could be improved if possible to have less people die. 
-Other possible targets include Depression, Cancer, CHD.
+## Feature scaling
+### Correlation with Stroke_m
+```{r stroke_correlations}
+corr_tbl <- df %>%
+  select(ends_with("_m") & where(is.numeric)) %>%
+  summarise(across(-Stroke_m,
+                   ~ cor(.x, Stroke_m, use = "complete.obs"))) %>%
+  pivot_longer(everything(), names_to = "Feature", values_to = "r") %>%
+  mutate(abs_r = abs(r)) %>%
+  arrange(desc(abs_r))
 
-The predictors we will use to diagnose this are decided by domain knowledge, logical thinking and comparison of correlations.
+print(corr_tbl, n = Inf)
 
+corr_tbl %>%
+  slice_head(n = 20) %>%
+  ggplot(aes(x = reorder(Feature, abs_r), y = r,
+             fill = r > 0)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "tomato"),
+                    labels = c("Negative", "Positive"), name = NULL) +
+  theme_minimal() +
+  labs(title = "Top 20 features by |r| with Stroke_m",
+       x = NULL, y = "Pearson r")
+```
+### Feature exclusion rationale
+We exclude features that are **consequences** of stroke rather than causes - including them would create **data leakage** (the model would learn from outcomes, not risk factors):
+| Excluded feature | Reason |
+|---|---|
+| `Mobility_m` | r = 0.957 — mobility impairment is a direct consequence of stroke |
+| `Selfcare_m`, `Indep_living_m`, `Disability_m` | Downstream disability outcomes |
+| `Hearing_m`, `Vision_m`, `Cognition_m` | Sensory/cognitive impairments caused by stroke |
+| `Physical_distress_m`, `General_hlth_m` | General health status downstream of stroke |
+| `Teeth_lost_m`, `Arthritis_m` | Comorbidities with high confounding, not causal |
+| `COPD_m` | High VIF (28) — collinear with Diabetes + CHD |
+| `HBP_m` | VIF = 18 when combined with Diabetes + CHD — dropped to reduce multicollinearity; CHD captures shared vascular pathway |
 
-We remove some columns right away as they could not haven influence on this, and they are: Colorectal cancer screening, visited dentist, general_health, 
-If person has a disability and also stroke, then there is not much that can be done for improvement in stroke risk.
+**Retained features** are all causally upstream, modifiable risk factors with domain support:
+| Feature | r with Stroke | Category | Rationale |
+|---|---|---|---|
+| `Diabetes_m` | 0.944 | Metabolic | Primary modifiable metabolic risk |
+| `CHD_m` | 0.914 | Cardiovascular | Shared vascular pathology with stroke |
+| `No_PA_m` | 0.787 | Behavioral | Lack of physical activity — independently modifiable |
+| `Smoking_m` | 0.728 | Behavioral | Direct vascular damage |
+| `Obesity_m` | 0.636 | Metabolic/Behavioral | Modifiable, drives diabetes and HBP |
+| `Short_sleep_m` | 0.399 | Behavioral | Sleep deprivation increases stroke risk |
 
+### Collinearity check - full correlation matrix of selected features
+```{r selected_corr_matrix}
+selected_for_corr <- c("Stroke_m", "Diabetes_m", "No_PA_m", "Smoking_m", "Obesity_m", "Short_sleep_m")
 
-First we will make all correlations positive and group them by their category, and then find out which category has the highest influence on the target.
+df %>%
+  select(all_of(selected_for_corr)) %>%
+  na.omit() %>%
+  cor() %>%
+  ggcorrplot(lab = TRUE, lab_size = 3,
+             colors = c("tomato", "white", "steelblue"),
+             title = "Correlation Matrix - selected features + target")
+```
+### VIF check
+```{r selected_corr_matrix}
+vif_data <- df %>%
+  select(Stroke_m, Diabetes_m, CHD_m, No_PA_m,
+         Smoking_m, Obesity_m, Short_sleep_m) %>%
+  na.omit()
 
+vif_vals <- lm(Stroke_m ~ Diabetes_m + CHD_m + No_PA_m +
+                 Smoking_m + Obesity_m + Short_sleep_m,
+               data = vif_data) %>%
+  vif()
 
-### Feature scaling, ....
+vif_df <- data.frame(Feature = names(vif_vals), VIF = round(vif_vals, 2)) %>%
+  mutate(Status = case_when(
+    VIF > 10 ~ "Severe (>10)",
+    VIF > 5  ~ "Moderate (5-10)",
+    TRUE     ~ "Acceptable (<5)"
+  ))
+
+print(vif_df)
+
+ggplot(vif_df, aes(x = reorder(Feature, VIF), y = VIF, fill = Status)) +
+  geom_col() +
+  geom_hline(yintercept = 5,  linetype = "dashed", color = "orange") +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "red") +
+  coord_flip() +
+  scale_fill_manual(values = c("Acceptable (<5)" = "steelblue",
+                                "Moderate (5-10)" = "orange",
+                                "Severe (>10)"    = "red")) +
+  theme_minimal() +
+  labs(title = "VIF for selected predictors",
+       subtitle = "Orange dashed = 5 threshold, Red dashed = 10 threshold",
+       x = NULL, y = "VIF")
+```
+`Diabetes_m` (VIF ≈ 8.0) and `No_PA_m` (VIF ≈ 6.1) are in the moderate range — no predictor exceeds 10, which is the standard threshold for severe multicollinearity (ISLR). Ridge and Lasso regression in Scenario 2 will further mitigate this through regularization.
+
+## Data preprocessing for modeling
+### Select and clean columns
+
+```{r model_cols}
+model_cols <- c("Stroke_m", "Diabetes_m", "CHD_m",
+                "No_PA_m", "Smoking_m", "Obesity_m", "Short_sleep_m")
+
+df_raw_model <- df %>%
+  select(all_of(model_cols)) %>%
+  na.omit()
+
+cat("Rows before outlier removal:", nrow(df_raw_model), "\n")
+```
+### Outliers removal - 3xIQR rule
+```{r outlier_removal}
+remove_outliers_iqr <- function(data, cols, k = 3) {
+  mask <- rep(TRUE, nrow(data))
+  for (col in cols) {
+    q <- quantile(data[[col]], c(0.25, 0.75), na.rm = TRUE)
+    iqr <- q[2] - q[1]
+    lower <- q[1] - k * iqr
+    upper <- q[2] + k * iqr
+    mask <- mask & (data[[col]] >= lower) & (data[[col]] <= upper)
+  }
+  data[mask, ]
+}
+
+df_model <- remove_outliers_iqr(df_raw_model, model_cols)
+
+cat("Rows after outlier removal: ", nrow(df_model), "\n")
+cat("Removed:                    ", nrow(df_raw_model) - nrow(df_model),
+    sprintf("(%.2f%%)\n", 100 * (nrow(df_raw_model) - nrow(df_model)) / nrow(df_raw_model)))
+```
+```{r outlier_comparison}
+bind_rows(
+  df_raw_model %>% mutate(stage = "Before"),
+  df_model %>% mutate(stage = "After")
+) %>%
+  pivot_longer(-stage, names_to = "variable", values_to = "value") %>%
+  ggplot(aes(x = stage, y = value, fill = stage)) +
+  geom_boxplot(outlier.size = 0.3) +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distributions before and after 3xIQR outlier removal",
+       x = NULL, fill = NULL)
+```
+### Skewness check
+```{r skewness}
+skew_tbl <- df_model %>%
+  summarise(across(everything(),
+                   ~ round(e1071::skewness(.x, na.rm = TRUE), 3))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Skewness") %>%
+  mutate(Interpretation = case_when(
+    abs(Skewness) < 0.5 ~ "Approximately symetric",
+    abs(Skewness) < 1.0 ~ "Moderate skew",
+    TRUE ~ "High skew"
+  ))
+
+print(skew_tbl)
+```
+All variables show skewness in the range [−0.5, 0.7] after outlier removal — approximately symmetric, acceptable for linear regression residuals. Log-transforming the target would actually worsen skewness (log-skew ≈ −2.2 vs raw skew ≈ 0.27), so we keep the raw scale.
 
 ```{r column_names}
 colnames(df)
@@ -469,7 +624,7 @@ plot_categorized_corr <- function(df, feature_map_colors) {
   target_cols <- names(feature_map_colors)
   cor_mat <- cor(df[, target_cols], use = "complete.obs")
   
-  corrplot(cor_mat, 
+  corrplot::corrplot(cor_mat, 
            method = "color", 
            type = "upper",
            tl.col = feature_map_colors[colnames(cor_mat)],
@@ -776,6 +931,101 @@ selected_cols_E <- c(
   "Insurance_lack_m",
   "Food_insecure_m",
 
+  "Smoking_w",
+  "Drinking_w",
+  "No_PA_w",
+  "Short_sleep_w",
+  "HBP_w",
+  "HBP_med_w",
+  "CHD_w",
+  "Diabetes_w",
+  "High_chol_w",
+  "Obesity_w"
+)
+
+selected_cols_F2 <- c(
+  "Stroke_m",
+
+  "HBP_m",
+  "HBP_med_m",
+  "Diabetes_m",
+  "CHD_m",
+  "Smoking_m",
+  "No_PA_m",
+
+  "Stroke_w",
+  "HBP_w",
+  "HBP_med_w",
+  "Diabetes_w",
+  "CHD_w",
+  "Smoking_w",
+  "No_PA_w"
+)
+
+selected_cols_F <- c(
+  "Stroke_m",
+  "Diabetes_m",   # r = 0.944 with Stroke_m — strongest causal risk factor
+  "HBP_m",        # r = 0.910 — high blood pressure, primary modifiable risk factor
+  "CHD_m",        # r = 0.914 — coronary heart disease shares vascular pathology
+  "Obesity_m",    # r = 0.636 — modifiable behavioral/metabolic risk
+  "Smoking_m",    # r = 0.728 — strongest behavioral risk factor for stroke
+  "No_PA_m"       # r = 0.787 — lack of physical activity, independently modifiable
+)
+
+selected_cols_G <- c(
+  "Stroke_m",
+
+  "Diabetes_m",
+  "HBP_m",
+  "CHD_m",
+  "Obesity_m",
+  "Smoking_m",
+  "No_PA_m",
+
+  "Stroke_w",
+  "Diabetes_w",
+  "HBP_w",
+  "CHD_w",
+  "Obesity_w",
+  "Smoking_w",
+  "No_PA_w"
+)
+
+selected_cols_H <- c(
+  "Stroke_m",
+
+  "Smoking_m",
+  "Drinking_m",
+  "No_PA_m",
+  "Short_sleep_m",
+
+  "HBP_m",
+  "HBP_med_m",
+  "CHD_m",
+  "Diabetes_m",
+  "High_chol_m",
+  "Obesity_m",
+
+  "Food_stamp_m",
+  "Insurance_lack_m",
+  "Food_insecure_m"
+)
+
+selected_cols_I <- c(
+  "Stroke_m",
+
+  "Smoking_m",
+  "Drinking_m",
+  "No_PA_m",
+  "Short_sleep_m",
+
+  "HBP_m",
+  "HBP_med_m",
+  "CHD_m",
+  "Diabetes_m",
+  "High_chol_m",
+  "Obesity_m",
+
   "Stroke_w",
   "Smoking_w",
   "Drinking_w",
@@ -789,8 +1039,33 @@ selected_cols_E <- c(
   "Obesity_w"
 )
 
+selected_cols_J <- c(
+  "Stroke_m",
+  "HBP_m",
+  "HBP_med_m",
+  "CHD_m",
+  "Diabetes_m",
+  "High_chol_m",
+  "Obesity_m"
+)
+
+selected_cols_K <- c(
+  "Stroke_m",
+  "HBP_m",
+  "HBP_med_m",
+  "CHD_m",
+  "Diabetes_m",
+  "High_chol_m",
+  "Obesity_m",
+  "Food_stamp_m",
+  "Insurance_lack_m",
+  "Food_insecure_m"
+)
+
+selected_cols <- selected_cols_E
+
 df_model <- df %>%
-  select(all_of(selected_cols_E)) %>%
+  select(all_of(selected_cols)) %>%
   na.omit()
 
 set.seed(42)
@@ -803,7 +1078,7 @@ test_data  <- testing(data_split)
 cat("Train:", nrow(train_data), "\n")
 cat("Test:", nrow(test_data), "\n")
 
-predictor_cols <- setdiff(selected_cols_A, "Stroke_m")
+predictor_cols <- setdiff(selected_cols, "Stroke_m")
 
 formula <- as.formula(
   paste("Stroke_m ~", paste(predictor_cols, collapse = " + "))
@@ -1005,12 +1280,12 @@ print(model_comparison)
 
 ```
 ```{r}
-baseline_comparison3 <- model_comparison
-print(baseline_comparison2)
+baseline_comparison4 <- model_comparison
+print(baseline_comparison4)
 
 write.csv(
-  baseline_comparison3,
-  "baseline_model_comparison3.csv",
+  baseline_comparison4,
+  "baseline_model_comparison4.csv",
   row.names = FALSE
 )
 ```

@@ -13,37 +13,25 @@ knitr::opts_chunk$set(echo = TRUE)
 install.packages(c(
   "tidyverse", "rsample", "caret", "corrplot", "patchwork",
   "glmnet", "arm", "rpart", "rpart.plot", "e1071",
-  "gbm", "earth", "car", "ggcorrplot"
+  "gbm", "earth", "car", "ggcorrplot", "randomForest"
 ))
 ```
 
 ```{r libraries}
-library(rlang)
-library(recipes)
-library(parsnip)
+library(tidyverse)
+library(rsample)
+library(caret)
 library(corrplot)
-library(workflows)
-library(tune)
-library(dials)
-library(kknn)
+library(patchwork)
 library(glmnet)
 library(arm)
-library(rpart)
-library(rpart.plot)
-library(dplyr)
-library(tibble)
-library(corrplot)
 library(randomForest)
-library(tidyverse)
-library(magrittr)
-library(patchwork)
-library(ggplot2)
 library(e1071)
-library(caret)
-library(conflicted)
-library(rsample)
-library(ggcorrplot)
+library(gbm)
+library(earth)
 library(car)
+library(ggcorrplot)
+library(conflicted)
 
 conflicts_prefer(dplyr::filter) 
 conflicts_prefer(tidyr::extract) 
@@ -58,26 +46,15 @@ df <- read_csv("PLACES__ZCTA_Data_(GIS_Friendly_Format),_2025_release_20260423.c
 
 We target **stroke prevalence** ('Stroke_m') as it is a severe, often fatal outcome with well-documented, modifiable risk factors. We hypothesize that:
 
-- Metabolic conditions (diabetes, coronary hearth disease) are strongest predictors of area-level stroke prevalence.
-- Behavioral factors (smoking, physical inactivity, obesiry, sleep deprivation) contribute independently.
+- Metabolic conditions (diabetes, coronary heart disease) are strongest predictors of area-level stroke prevalence.
+- Behavioral factors (smoking, physical inactivity, obesity, sleep deprivation) contribute independently.
 - After controlling for metabolic conditions, behavioral predictors explain residual variance.
 
-**Scenario 2 - Parametric regression:** Bayesian Linear Regression, Ridge Regression, Lasso Regression. These assume a linear functional form and estimate a fixed number of parameters.
-**Scenario 2 - Nonparametric regression:** Support Vector Regression, Gradient Boosting Regression, MARS. These make no assumption about functional form and can capture non-linear relationships.
+**Scenario 1 — Baseline models:** Linear Regression, kNN Regression, Random Forest Regression.
 
-##Hypothesis
-We decided to have value of Stroke as target value. It is very serious outcome, and many people die, so we want to find out, what are the biggest risk factors, which could be improved if possible to have less people die. 
-Other possible targets include Depression, Cancer, CHD.
+**Scenario 2 — Parametric regression:** Bayesian Linear Regression, Ridge Regression, Lasso Regression.
 
-The predictors we will use to diagnose this are decided by domain knowledge, logical thinking and comparison of correlations.
-
-
-We remove some columns right away as they could not haven influence on this, and they are: Colorectal cancer screening, visited dentist, general_health, 
-If person has a disability and also stroke, then there is not much that can be done for improvement in stroke risk.
-
-
-First we will make all correlations positive and group them by their category, and then find out which category has the highest influence on the target.
-
+**Scenario 2 — Nonparametric / flexible regression:** Support Vector Regression, Gradient Boosting Regression, MARS.
 
 ## Exploratory data analysis
 ### Inspecting data 
@@ -87,7 +64,7 @@ We need to find out the size of the dataset and the names of columns:
 ```{r size, include=TRUE}
 dim(df)
 ```
-```{r size, include=TRUE}
+```{r colnames, include=TRUE}
 colnames(df)
 ```
 We can see that there are columns ZCTA5 - this is unique id value for a row, which identifies area from which values of parameters are measured. There are columns for population and population over 18, and also geolocation. Other columns which have the main values are paired up, the one ending with \_crudePrev show average of that value in an area, and the ones ending with \_CI show two values, which mean that there is 95% confidence that value is somewhere in this interval.
@@ -266,7 +243,7 @@ We can see that the missing values are influenced by states from which they are 
 
 We need to rename columns as some names are not informative enough.
 
-```{r column_names}
+```{r colnames2}
 colnames(df)
 ```
 
@@ -425,7 +402,7 @@ df %>%
 
 ```
 
-## Feature scaling
+## Feature Selection
 ### Correlation with Stroke_m
 ```{r stroke_correlations}
 corr_tbl <- df %>%
@@ -473,8 +450,16 @@ We exclude features that are **consequences** of stroke rather than causes - inc
 | `Short_sleep_m` | 0.399 | Behavioral | Sleep deprivation increases stroke risk |
 
 ### Collinearity check - full correlation matrix of selected features
-```{r selected_corr_matrix}
-selected_for_corr <- c("Stroke_m", "Diabetes_m", "No_PA_m", "Smoking_m", "Obesity_m", "Short_sleep_m")
+```{r corr_matrix}
+selected_for_corr <- c(
+  "Stroke_m",
+  "Diabetes_m",
+  "CHD_m",
+  "No_PA_m",
+  "Smoking_m",
+  "Obesity_m",
+  "Short_sleep_m"
+)
 
 df %>%
   select(all_of(selected_for_corr)) %>%
@@ -582,111 +567,9 @@ print(skew_tbl)
 ```
 All variables show skewness in the range [−0.5, 0.7] after outlier removal — approximately symmetric, acceptable for linear regression residuals. Log-transforming the target would actually worsen skewness (log-skew ≈ −2.2 vs raw skew ≈ 0.27), so we keep the raw scale.
 
-```{r column_names}
-colnames(df)
-df <- df %>%
-  mutate(Adult_ratio = TotalPop18plus / TotalPopulation) %>%
-  select(-TotalPop18plus, -TotalPopulation)
-```
-
-```{r groups_define}
-feature_groups <- list(
-  Outcome = c("Arthritis_m", "HBP_m", "Cancer_m", "Asthma_m", "CHD_m", "COPD_m", "Depression_m", "Diabetes_m", "High_chol_m", "Obesity_m", "Stroke_m", "Teeth_lost_m"),
-  Preventive = c("Insurance_lack_m", "Checkup_m", "Chol_screen_m", "Colon_screen_m", "Dental_m", "Mammography_m", "HBP_med_m"),
-  Behavior = c("Drinking_m", "Short_sleep_m", "No_PA_m", "Smoking_m"),
-  Disability = c("Hearing_m", "Vision_m", "Cognition_m", "Mobility_m", "Selfcare_m", "Indep_living_m", "Disability_m"),
-  Social = c("Loneliness_m","Food_stamp_m","Food_insecure_m", "House_insecure_m", "Utility_threat_m", "Transport_lack_m","Support_lack_m"),
-  Status = c("General_hlth_m", "Physical_distress_m", "Mental_distress_m"),
-  Nonmedical = c("Adult_ratio", "Longitude", "Latitude")
-)
-```
-
-## Choosing models
-
-Hypothesis: Health outcomes have highest influence on general health (whether people say they have fair or poor health).
-
-First we need to find out, if there is severe multicollinearity among predictor columns.
-
-### Colinearity
-```{r color_colinearity}
-
-feature_to_color <- c(
-  setNames(rep("blue", length(feature_groups$Behavior)), feature_groups$Behavior),
-  setNames(rep("green", length(feature_groups$Preventive)), feature_groups$Preventive),
-  setNames(rep("black", length(feature_groups$Status)), feature_groups$Status),
-  setNames(rep("pink", length(feature_groups$Disability)), feature_groups$Disability),
-  setNames(rep("lightblue", length(feature_groups$Nonmedical)), feature_groups$Nonmedical),
-  setNames(rep("orange", length(feature_groups$Social)), feature_groups$Social),
-  setNames(rep("firebrick", length(feature_groups$Outcome)), feature_groups$Outcome)
-)
-
-plot_categorized_corr <- function(df, feature_map_colors) {
-  target_cols <- names(feature_map_colors)
-  cor_mat <- cor(df[, target_cols], use = "complete.obs")
-  
-  corrplot::corrplot(cor_mat, 
-           method = "color", 
-           type = "upper",
-           tl.col = feature_map_colors[colnames(cor_mat)],
-           tl.srt = 45,
-           tl.cex = 0.6,
-           number.cex = 0.4,
-           addCoef.col = "black",
-           mar = c(0,0,1,0),
-           title = "Correlations")
-}
-
-# Usage:
-plot_categorized_corr(df, feature_to_color)
-```
-
-
-
-## Modeling
-
-```{r skewness_values}
-
-df_model <- df %>%
-  select(all_of(selected_cols)) %>%
-  na.omit()
-
-
-df_model %>%
-  summarise(across(everything(), ~round(skewness(.x), 3))) %>%
-  pivot_longer(everything(), names_to = "Variable", values_to = "Skewness") %>%
-  arrange(desc(abs(Skewness))) %>%
-  print(n = Inf)
-
-
-plot_list <- lapply(selected_cols, function(col) {
-  ggplot(df, aes(x = .data[[col]])) +
-    geom_histogram(fill = "skyblue", color = "black", bins = 30) +
-    labs(title = paste("Histogram of", col), x = col, y = "Frequency") +
-    theme_minimal()
-})
-
-wrap_plots(plot_list)
-
-```
-
-
-
-```{r model_preparation}
-selected_cols <- c(
-  "Stroke_m",
-  "Smoking_m",
-  "Drinking_m",
-  "No_PA_m",
-  "Short_sleep_m",
-  "Stroke_w",
-  "Smoking_w",
-  "Drinking_w",
-  "No_PA_w",
-  "Short_sleep_w"
-)
-df_model <- df %>%
-  select(all_of(selected_cols)) %>%
-  na.omit()
+## Train Test split
+```{r test_train_split}
+set.seed(42)
 
 data_split <- initial_split(df_model, prop = 0.8)
 train_data <- training(data_split)
@@ -695,19 +578,21 @@ test_data <- testing(data_split)
 cat("Train:", nrow(train_data), "\n")
 cat("Test:", nrow(test_data), "\n")
 
-formula <- Stroke_m ~ Smoking_m + Drinking_m + No_PA_m + Short_sleep_m
+formula_stroke <- Stroke_m ~ Diabetes_m + CHD_m + No_PA_m + Smoking_m + Obesity_m + Short_sleep_m
+
 
 ```
 ```{r pairplot}
-pairs(df_model[, selected_cols], 
-    main = "Scatter Plot Matrix",
-    pch = 19,
-    cex = 0.02,   
-    col = "steelblue")
-
+pairs(df_model,
+      pch = 19, cex = 0.03, col = "steelblue",
+      main = "Pairplot - modeling features after preprocessing")
 ```
+The pairplot indicates that the selected predictors are suitable for modeling `Stroke_m`. The clearest positive relationships are visible for `Diabetes_m` and `CHD_m`, which supports their role as the strongest predictors of stroke prevalence. Behavioral variables such as `No_PA_m`, `Smoking_m`, `Obesity_m`, and `Short_sleep_m` also show positive associations, although with more variability.
 
-### Linear regression
+Several predictors are correlated with each other, especially diabetes, coronary heart disease, physical inactivity, and obesity. This suggests moderate multicolinearity, which is expected in health data and is evaluated using VIF. Since the relationships are mostly monotonic and approximately linear, linear models are appropriate, while the visible scatter and mild nonlinearity also justify testing flexible nonparametric models.
+
+# Scenario 1
+## 1. Linear regression
 
 #### Conditions
 To use linear regression, we need to make sure that there are linear relationships between target and predictors, there should homoscedasticity, no extreme outliers, there should be no severe multicollinearity, feature scaling might help.
@@ -723,154 +608,145 @@ print(skewness_df)
 
 
 ```{r homeost}
-model <- lm(formula, data = train_data)
-summary(model)
-confint(model)
+lm_model <- lm(formula_stroke, data = train_data)
 
-lm_preds <- predict(model, test_data)
-lm_performance <- postResample(pred = lm_preds, obs = test_data$Stroke_m)
-lm_performance
+summary(lm_model)
+confint(lm_model)
+
+lm_preds <- predict(lm_model, newdata = test_data)
+
+lm_perf <- postResample(
+  pred = lm_preds,
+  obs = test_data$Stroke_m
+)
+
+print(lm_perf)
 
 par(mfrow = c(2, 2))
-plot(model)
+plot(lm_model)
 par(mfrow = c(1, 1))
 ```
 
-```{r with_weights}
-
-df_model <- df_model %>%
-  mutate(total_variance = Smoking_w^2 + Drinking_w^2 + No_PA_w^2 + Short_sleep_w^2,
-         weight_val = 1 / total_variance)
-
-weighted_model <- lm(Stroke_m ~ Smoking_m + Drinking_m + No_PA_m + Short_sleep_m, 
-                     data = df_model, 
-                     weights = weight_val)
-
-summary(weighted_model)
-```
-There are some unexpected results, the model tells us that the more people drink and less sleep, the lower chance they have of a stroke. This could be because there are more younger people in that specific area - they have generally lower chance of having had stroke in their life till now, and also they probably drink more and sleep less. 
-
-### KNN
+## 2. KNN
 ```{r knn}
-knn_fit <- knnreg(
-  formula, 
-  data = train_data, 
-  k = 10,
-  preProcess = c("center", "scale")
-)
+knn_ctrl <- trainControl(method = "cv", number = 5)
 
-#knn_smart_model <- train(
-#  Stroke_m ~ Smoking_m + Drinking_m + No_PA_m + Short_sleep_m, 
-#  data = train_data,
-#  method = "knn",
-#  preProcess = c("center", "scale"),
-#  tuneGrid = expand.grid(k = 1:20) # This tests k from 1 to 20
-#)
-
-test_predictions <- predict(knn_fit, test_data)
-
-knn_performance <- postResample(pred = test_predictions, obs = test_data$Stroke_m)
-print(knn_performance)
-
-importance <- filterVarImp(x = train_data[, c("Smoking_m", "Drinking_m", "No_PA_m", "Short_sleep_m")], 
-                           y = train_data$Stroke_m)
-print(importance)
-
-test_results <- test_data %>%
-  mutate(predictions = test_predictions)
-
-ggplot(test_results, aes(x = Stroke_m, y = predictions)) +
-  geom_point(alpha = 0.3, color = "darkgreen") +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
-  labs(title = "k-NN Performance: Actual vs. Predicted Stroke Risk",
-       x = "Actual Stroke %",
-       y = "k-NN Predicted %") +
-  theme_minimal()
-
-```
-
-
-### Random tree 
-```{r random_tree}
-library(rpart)
-tree_model <- rpart(
-  GHLTH_CrudePrev ~ ., data = train, method = "anova",
-  control = rpart.control(cp = 0.001, maxdepth = 6)
-)
-
-rpart.plot(tree_model, type = 4, extra = 101, roundint = FALSE,
-           main = "Decision Tree - before pruning")
-
-printcp(tree_model)
-best_cp <- tree_model$cptable[which.min(tree_model$cptable[, "xerror"]), "CP"]
-tree_pruned <- prune(tree_model, cp = best_cp)
-
-rpart.plot(tree_pruned, type = 4, extra = 101, roundint = FALSE,
-           main = "Decision Tree - pruned")
-
-pred_tree <- predict(tree_pruned, newdata = test)
-results$tree <- tibble(Model = "Decision Tree",
-                       RMSE = rmse(test$GHLTH_CrudePrev, pred_tree),
-                       MAE = mae(test$GHLTH_CrudePrev, pred_tree),
-                       R2 = r2(test$GHLTH_CrudePrev, pred_tree))
-```
-
-
-
-### Random forest
-```{r randomforest}
-rf_model <- randomForest(
-  formula, 
+knn_model <- train(
+  formula_stroke,
   data = train_data,
-  ntree = 300, 
-  mtry = 3, 
-  importance = TRUE,
-  na.action = na.omit
+  method = "knn",
+  preProcess = c("center", "scale"),
+  tuneGrid = expand.grid(k = c(3, 5, 7, 10, 15, 20, 25, 30, 40, 50)),
+  trControl = knn_ctrl,
+  metric = "RMSE"
 )
 
-rf_preds <- predict(rf_model, test_data)
+print(knn_model)
+plot(knn_model)
 
-rf_performance <- postResample(pred = rf_preds, obs = test_data$Stroke_m)
-print(rf_performance)
+knn_preds <- predict(knn_model, newdata = test_data)
 
-importance_df <- as.data.frame(importance(rf_model))
-varImpPlot(rf_model, main = "Random Forest: Variable Importance")
+knn_perf <- postResample(
+  pred = knn_preds,
+  obs = test_data$Stroke_m
+)
+
+print(knn_perf)
+
+ggplot(data.frame(obs = test_data$Stroke_m, pred = knn_preds),
+       aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.15, size = 0.6, color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(
+    title = "kNN Regression: Actual vs Predicted",
+    x = "Actual Stroke %",
+    y = "Predicted Stroke %"
+  )
+```
+
+### 3. Random forest
+```{r randomforest}
+set.seed(42)
+
+rf_grid <- expand.grid(
+  mtry = c(1, 2, 3, 4, 5, 6)
+)
+
+rf_model <- train(
+  formula_stroke,
+  data = train_data,
+  method = "rf",
+  tuneGrid = rf_grid,
+  trControl = trainControl(method = "cv", number = 5),
+  metric = "RMSE",
+  ntree = 500,
+  importance = TRUE
+)
+
+print(rf_model)
+plot(rf_model)
+
+rf_preds <- predict(rf_model, newdata = test_data)
+
+rf_perf <- postResample(
+  pred = rf_preds,
+  obs = test_data$Stroke_m
+)
+
+print(rf_perf)
+
+rf_importance <- varImp(rf_model)
+print(rf_importance)
+
+plot(rf_importance, main = "Random Forest: Variable Importance")
+
+ggplot(data.frame(obs = test_data$Stroke_m, pred = rf_preds),
+       aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.15, size = 0.6, color = "darkblue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(
+    title = "Random Forest: Actual vs Predicted",
+    x = "Actual Stroke %",
+    y = "Predicted Stroke %"
+  )
 ```
 
 
 ## Model comparison
 ```{r model_comparison}
-model_comparison <- data.frame(
-  
-  Model = c("Linear Regression", "k-NN", "Random Forest"),
-  RMSE = c(lm_performance[1], knn_performance[1], rf_performance[1]),
-  Rsquared = c(lm_performance[2], knn_performance[2], rf_performance[2])
-)
+scenario1_results <- data.frame(
+  Model = c(
+    "Linear Regression",
+    "kNN Regression",
+    "Random Forest Regression"
+  ),
+  RMSE = c(
+    lm_perf["RMSE"],
+    knn_perf["RMSE"],
+    rf_perf["RMSE"]
+  ),
+  Rsquared = c(
+    lm_perf["Rsquared"],
+    knn_perf["Rsquared"],
+    rf_perf["Rsquared"]
+  ),
+  MAE = c(
+    lm_perf["MAE"],
+    knn_perf["MAE"],
+    rf_perf["MAE"]
+  )
+) %>%
+  mutate(
+    RMSE = as.numeric(RMSE),
+    Rsquared = as.numeric(Rsquared),
+    MAE = as.numeric(MAE)
+  ) %>%
+  arrange(RMSE)
 
-print(model_comparison)
-
+print(scenario1_results)
 ```
-
-## Train / test split
-```{r split}
-data_split <- initial_split(df_model, prop = 0.8)
-train_data <- training(data_split)
-test_data <- testing(data_split)
-
-cat("Train:", nrow(train_data), "\n")
-cat("Test:", nrow(test_data), "\n")
-
-formula_stroke <- Stroke_m ~ Diabetes_m + CHD_m + No_PA_m + Smoking_m + Obesity_m + Short_sleep_m
-```
-
-```{r pairplot}
-pairs(df_model,
-      pch = 19, cex = 0.03, col = "steelblue",
-      main = "Pairplot - modeling features after preprocessing")
-```
-The pairplot indicates that the selected predictors are suitable for modeling `Stroke_m`. The clearest positive relationships are visible for `Diabetes_m` and `CHD_m`, which supports their role as the strongest predictors of stroke prevalence. Behavioral variables such as `No_PA_m`, `Smoking_m`, `Obesity_m`, and `Short_sleep_m` also show positive associations, although with more variability.
-
-Several predictors are correlated with each other, especially diabetes, coronary heart disease, physical inactivity, and obesity. This suggests moderate multicollinearity, which is expected in health data and is evaluated using VIF. Since the relationships are mostly monotonic and approximately linear, linear models are appropriate, while the visible scatter and mild nonlinearity also justify testing flexible nonparametric models.
 
 # Scenario 2
 Parametric models assume a **fixed linear functional form**: Stroke_m ≈ β₀ + β₁·Diabetes + β₂·CHD + … + ε. They estimate a finite, fixed number of coefficients. This makes them interpretable and statistically efficient when assumptions hold.
@@ -1121,10 +997,10 @@ gbm_model <- train(
   method = "gbm",
   trControl = gbm_ctrl,
   tuneGrid = expand.grid(
-    n.trees = c(500, 800, 1000),
-    interaction.depth = c(3, 5, 7),
-    shrinkage = c(0.05, 0.08, 0.1),
-    n.minobsinnode = 10
+    n.trees = c(2000, 2500, 3000),
+    interaction.depth = c(7, 9, 11),
+    shrinkage = c(0.03, 0.05, 0.07),
+    n.minobsinnode = c(5, 10, 20)
   ),
   metric = "RMSE",
   verbose = FALSE
@@ -1143,7 +1019,7 @@ ggplot(gbm_imp, aes (x = reorder(Feature, RelativeInfluence),
   geom_col(fill = "steelblue") +
   coord_flip() +
   theme_minimal() +
-  labs(title = "GMB: Relative feature influence", x = NULL, y = "Relative Influence (%)")
+  labs(title = "GBM: Relative feature influence", x = NULL, y = "Relative Influence (%)")
 
 ```
 
@@ -1205,7 +1081,10 @@ ggplot(mars_imp, aes(x = reorder(Feature, Overall), y = Overall)) +
   theme_minimal() +
   labs(title = "MARS: Variable importance", x = NULL, y = "Importance")
 ```
+
 ```{r mars_predict}
+mars_preds <- as.numeric(predict(mars_model, newdata = test_data))
+
 mars_plot_df <- data.frame(
   obs = test_data$Stroke_m,
   pred = as.numeric(mars_preds)
@@ -1249,4 +1128,58 @@ error_by_bin <- function(preds, obs) {
 }
 
 error_by_bin(svr_preds, test_data$Stroke_m)
+```
+```{r scenario2_comparison}
+scenario2_results <- data.frame(
+  Model = c(
+    "Bayesian Linear Regression",
+    "Ridge Regression",
+    "Lasso Regression",
+    "Support Vector Regression",
+    "Gradient Boosting Regression",
+    "MARS"
+  ),
+  Type = c(
+    "Parametric",
+    "Parametric",
+    "Parametric",
+    "Nonparametric",
+    "Nonparametric",
+    "Nonparametric / flexible"
+  ),
+  RMSE = c(
+    bayes_perf["RMSE"],
+    ridge_perf["RMSE"],
+    lasso_perf["RMSE"],
+    svr_perf["RMSE"],
+    gbm_perf["RMSE"],
+    mars_perf["RMSE"]
+  ),
+  Rsquared = c(
+    bayes_perf["Rsquared"],
+    ridge_perf["Rsquared"],
+    lasso_perf["Rsquared"],
+    svr_perf["Rsquared"],
+    gbm_perf["Rsquared"],
+    mars_perf["Rsquared"]
+  ),
+  MAE = c(
+    bayes_perf["MAE"],
+    ridge_perf["MAE"],
+    lasso_perf["MAE"],
+    svr_perf["MAE"],
+    gbm_perf["MAE"],
+    mars_perf["MAE"]
+  )
+) %>%
+  mutate(
+    RMSE = as.numeric(RMSE),
+    Rsquared = as.numeric(Rsquared),
+    MAE = as.numeric(MAE)
+  ) %>%
+  arrange(RMSE)
+
+rownames(scenario2_results) <- NULL
+
+print(scenario2_results)
 ```

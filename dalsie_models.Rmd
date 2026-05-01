@@ -894,7 +894,21 @@ par(mfrow = c(2, 2))
 plot(lm_diag)
 par(mfrow = c(1, 1))
 ```
-#### 2. Ridge Regression
+```{r bayesian_predict}
+bayes_preds <- predict(bayes_model, newdata = test_data)
+
+ggplot(data.frame(obs = test_data$Stroke_m, pred = bayes_preds),
+       aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.15, size = 0.6, color = "purple") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(title = "Bayesian Linear Regression: Actual vs Predicted",
+       x = "Actual Stroke %", y = "Predicted Stroke %")
+
+bayes_perf <- postResample(pred = bayes_preds, obs = test_data$Stroke_m)
+bayes_perf
+```
+### 2. Ridge Regression
 #### Assumptions
 
 Ridge adds an **L2 penalty** (λ·Σβⱼ²) to the OLS loss function. This shrinks all coefficients toward zero simultaneously, which directly addresses the moderate multicollinearity we observed between `Diabetes_m`, `No_PA_m`, and `CHD_m`. It trades a small increase in bias for potentially large reduction in variance.
@@ -961,7 +975,7 @@ ggplot(data.frame(obs = test_data$Stroke_m, pred = ridge_preds),
 ridge_perf <- postResample(pred = ridge_preds, obs = test_data$Stroke_m)
 ridge_perf
 ```
-#### Lasso Regression
+### 3. Lasso Regression
 #### Assumptions
 
 Lasso adds an **L1 penalty** (λ·Σ|βⱼ|) instead of L2. The key difference: the L1 penalty produces **sparse solutions** — it can set some coefficients to exactly zero, performing automatic feature selection. This is particularly valuable here because `Short_sleep_m` has the weakest correlation with Stroke_m (r = 0.40) and the Lasso can shrink it to zero if it does not contribute independently.
@@ -1023,4 +1037,216 @@ ggplot(lasso_coef_df, aes(x = reorder(Term, abs(Coefficient)),
     subtitle = "Zero coefficients = excluded by Lasso"
   )
 ```
+```{r lasso_predict}
+lasso_preds <- as.numeric(predict(lasso_cv, s = "lambda.min", newx = X_test))
+
+ggplot(data.frame(obs = test_data$Stroke_m, pred = lasso_preds),
+       aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.15, size = 0.6, color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(title = "Lasso Regression: Actual vs Predicted",
+       x = "Actual Stroke %", y = "Predicted Stroke %")
+
+lasso_perf <- postResample(pred = lasso_preds, obs = test_data$Stroke_m)
+lasso_perf
+```
 ## Nonparametric models
+Nonparametric models make **no assumption about the functional form** of the relationship. They allow the data to determine the structure of the prediction surface, enabling them to capture non-linearity and interactions. This matters here because the scatter plots show mild curvature in the Diabetes–Stroke relationship.
+
+### 1. Support Vector Regression (SVR)
+SVR finds the flattest function that fits training data within a tolerance tube of width ε around predictions (the "epsilon-insensitive tube"). Only observations outside this tube (support vectors) influence the fit.
+
+- **Feature scaling required** — SVR is distance-based; unscaled variables would dominate.
+- **No distributional assumptions** on response or predictors.
+- **RBF kernel** (Radial Basis Function) maps data to an infinite-dimensional space, enabling non-linear relationships without specifying a form. The kernel choice implicitly assumes local smoothness.
+- **Independence** of observations — assumed.
+- **No multicollinearity restriction** — but collinear features waste capacity.
+- **Hyperparameters tuned via cross-validation:**
+  - **C (cost)**: trade-off between margin width and training error. Higher C → less regularization.
+  - **σ (sigma/gamma)**: RBF bandwidth. High σ → local influence (risk of overfitting); low σ → global.
+  - **ε (epsilon)**: insensitive tube half-width — we use `method = "svmRadial"` which tunes C and sigma.
+
+```{r svr_fit}
+svr_ctrl <- trainControl(method = "cv", number = 5)
+
+svr_model <- train(
+  formula_stroke,
+  data = train_data,
+  method = "svmRadial",
+  preProcess = c("center", "scale"),
+  tuneGrid = expand.grid(C = c(1, 10, 50),
+                         sigma = c(0.01, 0.05, 0.1)),
+  trControl = svr_ctrl,
+  metric = "RMSE"
+)
+
+print(svr_model)
+```
+```{r svr_predict}
+svr_preds <- predict(svr_model, newdata = test_data)
+
+ggplot(data.frame(obs = test_data$Stroke_m, pred = svr_preds),
+       aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.15, size = 0.6, color = "firebrick") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(title = "SVR: Actual vs Predicted",
+       x = "Actual Stroke %", y = "Predicted Stroke %")
+
+svr_perf <- postResample(pred = svr_preds, obs = test_data$Stroke_m)
+svr_perf
+```
+
+### 2. Gradient Boosting Regression
+#### Assumptions
+- **No linearity, normality, or homoscedasticity assumptions.**
+- **No feature scaling required** — tree-based splits are scale-invariant.
+- **Independence** of observations — assumed.
+- **Robust to outliers** — tree splits are order-based.
+- **Can capture non-linear patterns and interactions** automatically and more flexibly than a single tree.
+- **Prone to overfitting** without regularization — controlled by:
+  - `n.trees`: number of boosting iterations (more = risk of overfit)
+  - `interaction.depth`: max tree depth (controls complexity)
+  - `shrinkage`: learning rate — smaller = more conservative, needs more trees
+  - `n.minobsinnode`: minimum observations per leaf — regularization
+- We tune these via **5-fold cross-validation**.
+
+```{r gbm_fit}
+gbm_ctrl <- trainControl(method = "cv", number = 5)
+
+gbm_model <- train(
+  formula_stroke,
+  data = train_data,
+  method = "gbm",
+  trControl = gbm_ctrl,
+  tuneGrid = expand.grid(
+    n.trees = c(500, 800, 1000),
+    interaction.depth = c(3, 5, 7),
+    shrinkage = c(0.05, 0.08, 0.1),
+    n.minobsinnode = 10
+  ),
+  metric = "RMSE",
+  verbose = FALSE
+)
+
+print(gbm_model)
+plot(gbm_model, main = "GBM: CV RMSE by hyperparameters")
+```
+```{r gbm_importance}
+gbm_imp <- summary(gbm_model$finalModel, plotit = FALSE) %>%
+  as.data.frame() %>%
+  rename(Feature = var, RelativeInfluence = rel.inf)
+
+ggplot(gbm_imp, aes (x = reorder(Feature, RelativeInfluence),
+                     y = RelativeInfluence)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "GMB: Relative feature influence", x = NULL, y = "Relative Influence (%)")
+
+```
+
+```{r gbm_predict}
+gbm_preds <- predict(gbm_model, newdata = test_data)
+
+ggplot(data.frame(obs = test_data$Stroke_m, pred = gbm_preds),
+       aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.15, size = 0.6, color = "darkorange") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(title = "GBM: Actual vs Predicted",
+       x = "Actual Stroke %", y = "Predicted Stroke %")
+
+gbm_perf <- postResample(pred = gbm_preds, obs = test_data$Stroke_m)
+gbm_perf
+```
+
+### 3. MARS — Multivariate Adaptive Regression Splines
+#### Assumptions
+
+MARS automatically searches for **breakpoints (knots)** in each predictor and fits piecewise linear functions between them. It can also detect **interaction terms** up to a specified degree. Unlike a global polynomial, each spline piece is only active in its region, making MARS more interpretable than GBM while still capturing non-linearity.
+
+- **No linearity assumption** — MARS discovers the functional form from the data.
+- **No normality or homoscedasticity assumptions** (though residual checks are still informative).
+- **No feature scaling required** — knot placement is scale-invariant.
+- **Independence** of observations — assumed.
+- **Automatic feature selection and interaction detection** — terms that do not improve fit are pruned back.
+- **Hyperparameters:**
+  - `degree`: maximum interaction order. `degree = 1` = additive model (no interactions); `degree = 2` = allows pairwise interactions.
+  - `nprune`: maximum number of terms retained after backward pruning.
+- We tune `degree` and `nprune` via cross-validation.
+```{r mars_fit}
+mars_ctrl <- trainControl(method = "cv", number = 5)
+
+mars_model <- train(
+  formula_stroke,
+  data = train_data,
+  method = "earth",
+  trControl = mars_ctrl,
+  tuneGrid = expand.grid(degree = 1:2, nprune = c(5, 10, 15, 20)),
+  metric = "RMSE"
+)
+
+print(mars_model)
+plot(mars_model, main = "MARS: CV RMSE by degree and nprune")
+```
+
+```{r mars_summary}
+summary(mars_model$finalModel)
+```
+```{r mars_importance}
+mars_imp <- varImp(mars_model)$importance %>%
+  rownames_to_column("Feature")
+
+ggplot(mars_imp, aes(x = reorder(Feature, Overall), y = Overall)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "MARS: Variable importance", x = NULL, y = "Importance")
+```
+```{r mars_predict}
+mars_plot_df <- data.frame(
+  obs = test_data$Stroke_m,
+  pred = as.numeric(mars_preds)
+)
+
+ggplot(mars_plot_df, aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.15, size = 0.6, color = "darkviolet") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(
+    title = "MARS: Actual vs Predicted",
+    x = "Actual Stroke %",
+    y = "Predicted Stroke %"
+  )
+```
+```{r mars_perf}
+mars_perf <- postResample(pred = mars_preds, obs = test_data$Stroke_m)
+mars_perf
+```
+
+```{r error_by_bin}
+error_by_bin <- function(preds, obs) {
+  data.frame(obs = obs, pred = preds) %>%
+    mutate(
+      error = pred - obs,
+      abs_error = abs(error),
+      bin = ntile(obs, 5)
+    ) %>%
+    group_by(bin) %>%
+    summarise(
+      n = n(),
+      min_obs = min(obs),
+      max_obs = max(obs),
+      mean_obs = mean(obs),
+      mean_pred = mean(pred),
+      mean_error = mean(error),
+      MAE = mean(abs_error),
+      RMSE = sqrt(mean(error^2)),
+      .groups = "drop"
+    )
+}
+
+error_by_bin(svr_preds, test_data$Stroke_m)
+```

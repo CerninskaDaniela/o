@@ -35,6 +35,7 @@ library(conflicted)
 
 conflicts_prefer(dplyr::filter) 
 conflicts_prefer(tidyr::extract) 
+conflicts_prefer(dplyr::select)
 
 set.seed(42)
 ```
@@ -670,7 +671,7 @@ ggplot(data.frame(obs = test_data$Stroke_m, pred = knn_preds),
 set.seed(42)
 
 rf_grid <- expand.grid(
-  mtry = c(1, 2, 3, 4, 5, 6)
+  mtry = c(2, 3, 4)
 )
 
 rf_model <- train(
@@ -747,6 +748,7 @@ scenario1_results <- data.frame(
 
 print(scenario1_results)
 ```
+Scenario 1 provides the first comparison of baseline model families on the same prepared dataset. Linear Regression is used as an interpretable baseline, kNN as a distance-based model requiring scaling, and Random Forest as a tree-ensemble model that can capture nonlinear relationships and interactions.
 
 # Scenario 2
 Parametric models assume a **fixed linear functional form**: Stroke_m ≈ β₀ + β₁·Diabetes + β₂·CHD + … + ε. They estimate a finite, fixed number of coefficients. This makes them interpretable and statistically efficient when assumptions hold.
@@ -946,32 +948,45 @@ SVR finds the flattest function that fits training data within a tolerance tube 
 ```{r svr_fit}
 svr_ctrl <- trainControl(method = "cv", number = 5)
 
-svr_model <- train(
+svr_grid_tuned <- expand.grid(
+  C = c(25, 50, 75, 100),
+  sigma = c(0.03, 0.05, 0.07)
+)
+
+svr_model_tuned <- train(
   formula_stroke,
   data = train_data,
   method = "svmRadial",
   preProcess = c("center", "scale"),
-  tuneGrid = expand.grid(C = c(1, 10, 50),
-                         sigma = c(0.01, 0.05, 0.1)),
+  tuneGrid = svr_grid_tuned,
   trControl = svr_ctrl,
   metric = "RMSE"
 )
 
-print(svr_model)
+print(svr_model_tuned)
+plot(svr_model_tuned)
 ```
-```{r svr_predict}
-svr_preds <- predict(svr_model, newdata = test_data)
 
-ggplot(data.frame(obs = test_data$Stroke_m, pred = svr_preds),
+```{r svr_predict}
+svr_preds_tuned <- predict(svr_model_tuned, newdata = test_data)
+
+ggplot(data.frame(obs = test_data$Stroke_m, pred = svr_preds_tuned),
        aes(x = obs, y = pred)) +
   geom_point(alpha = 0.15, size = 0.6, color = "firebrick") +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
   theme_minimal() +
-  labs(title = "SVR: Actual vs Predicted",
-       x = "Actual Stroke %", y = "Predicted Stroke %")
+  labs(
+    title = "Tuned SVR: Actual vs Predicted",
+    x = "Actual Stroke %",
+    y = "Predicted Stroke %"
+  )
 
-svr_perf <- postResample(pred = svr_preds, obs = test_data$Stroke_m)
-svr_perf
+svr_perf_tuned <- postResample(
+  pred = svr_preds_tuned,
+  obs = test_data$Stroke_m
+)
+
+svr_perf_tuned
 ```
 
 ### 2. Gradient Boosting Regression
@@ -1183,3 +1198,66 @@ rownames(scenario2_results) <- NULL
 
 print(scenario2_results)
 ```
+
+### Scenario 2 interpretation
+
+Scenario 2 compares parametric models with nonparametric or flexible models using the same target, predictors, preprocessing, and train/test split. If the flexible models outperform the parametric models, this supports the idea that the relationship between health predictors and stroke prevalence is not fully linear.
+
+SVR and Gradient Boosting are expected to be the strongest predictive models. GBM is especially useful because it also provides variable importance, making it easier to interpret which predictors contribute most to the predictions.
+
+# Overall comparison
+
+```{r overall_comparison}
+overall_results <- bind_rows(
+  scenario1_results %>%
+    mutate(
+      Scenario = "Scenario 1",
+      Type = case_when(
+        Model == "Linear Regression" ~ "Parametric",
+        Model == "kNN Regression" ~ "Nonparametric",
+        Model == "Random Forest Regression" ~ "Nonparametric",
+        TRUE ~ "Other"
+      )
+    ),
+  scenario2_results %>%
+    mutate(Scenario = "Scenario 2")
+) %>%
+  select(Scenario, Type, Model, RMSE, Rsquared, MAE) %>%
+  arrange(RMSE)
+
+print(overall_results)
+
+overall_results %>%
+  pivot_longer(
+    cols = c(RMSE, Rsquared, MAE),
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  ggplot(aes(x = reorder(Model, Value), y = Value, fill = Type)) +
+  geom_col() +
+  facet_wrap(~Metric, scales = "free_x") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Overall Model Comparison",
+    subtitle = "All models use the same target, selected predictors, preprocessing and train/test split",
+    x = NULL,
+    y = "Value",
+    fill = "Model type"
+  )
+```
+
+## Final discussion 
+
+All models were trained and evaluated on the same selected feature set and the same train/test split. This makes the model comparison fair and reproducible. Hyperparameters were selected using cross-validation on the training data, while the test set was used only for final evaluation.
+
+The results show that nonparametric and flexible models generally outperformed linear parametric models. This suggests that the relationship between stroke prevalence and the selected health predictors is not purely linear. The best-performing models were SVR and Gradient Boosting Regression.
+
+Across several models, `Diabetes_m` and `CHD_m` were consistently the strongest predictors of stroke prevalence. This is consistent with the initial correlation analysis and with medical domain knowledge, because both variables represent strong metabolic and cardiovascular risk burden.
+
+Linear Regression, Bayesian Linear Regression, Ridge and Lasso provided interpretable baselines. Ridge and Lasso were useful because they handle moderate multicollinearity through regularization. However, their performance was weaker than the best flexible models.
+
+Gradient Boosting achieved strong predictive performance while also providing feature importance, making it a good balance between accuracy and interpretability. SVR achieved very strong predictive accuracy, but is less interpretable than tree-based models.
+
+Overall, the selected feature set is justified: it excludes downstream consequences of stroke to avoid leakage and keeps upstream metabolic, cardiovascular and behavioral risk factors.
+
